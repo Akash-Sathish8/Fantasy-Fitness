@@ -13,9 +13,21 @@ import Supabase
 
 @Observable
 final class GameStore {
+    /// Progress of the most recent load. Screens show a loading or error board while
+    /// there is no data yet; after that, refresh failures keep the last good data.
+    enum LoadState: Equatable {
+        case idle, loading, loaded
+        case failed(String)
+    }
+
     private(set) var isSignedIn = false
-    private(set) var isLoading = false
+    private(set) var loadState: LoadState = .idle
+    /// Set when a refresh fails while older data is still on screen.
+    private(set) var refreshError: String?
     private(set) var profile: PlayerProfile?
+    /// Hours slept last night, if the player has logged it.
+    private(set) var lastNightSleepHours: Double?
+    private(set) var accountEmail: String?
     private(set) var quests: [QuestKind: Quest] = [:]
     private(set) var inventory: [Item] = []
     private(set) var dungeons: [Dungeon] = []
@@ -34,6 +46,7 @@ final class GameStore {
     }
 
     var isDemo: Bool { client == nil }
+    var hasData: Bool { profile != nil }
     var player: PlayerProfile { profile ?? .empty }
     var equippedIDs: Set<String> { Set(player.equipped.map(\.id)) }
 
@@ -44,8 +57,7 @@ final class GameStore {
         guard let client, client.auth.currentSession != nil else { return false }
         do {
             _ = try await client.auth.session
-            await load()
-            return isSignedIn
+            return await loadForSignIn()
         } catch {
             return false
         }
@@ -77,8 +89,7 @@ final class GameStore {
                     + "If you open it elsewhere, come back and log in once it says you're confirmed."
                 return false
             }
-            await load()
-            return isSignedIn
+            return await loadForSignIn()
         } catch {
             errorMessage = Self.message(for: error)
             return false
@@ -90,8 +101,7 @@ final class GameStore {
         guard let client, url.scheme == Backend.authRedirectURL.scheme else { return false }
         do {
             try await client.auth.session(from: url)
-            await load()
-            return isSignedIn
+            return await loadForSignIn()
         } catch {
             errorMessage = "That link didn't work (\(Self.message(for: error))). Try logging in with your email and password."
             return false
@@ -101,7 +111,11 @@ final class GameStore {
     func signOut() async {
         try? await client?.auth.signOut()
         isSignedIn = false
+        loadState = .idle
+        refreshError = nil
         userID = nil
+        accountEmail = nil
+        lastNightSleepHours = nil
         profile = nil
         quests = [:]
         inventory = []
@@ -117,8 +131,7 @@ final class GameStore {
         }
         do {
             _ = try await action(client)
-            await load()
-            return isSignedIn
+            return await loadForSignIn()
         } catch {
             errorMessage = Self.message(for: error)
             return false
@@ -127,30 +140,42 @@ final class GameStore {
 
     // MARK: - Loading
 
+    /// Loads after signing in. If the data can't be fetched, sign-in fails with a message
+    /// rather than dropping the player into empty screens.
+    private func loadForSignIn() async -> Bool {
+        await load()
+        if case .failed(let message) = loadState {
+            errorMessage = "Signed in, but your guild data couldn't load: \(message)"
+            return false
+        }
+        return isSignedIn
+    }
+
+    /// Fetches everything the screens show. Safe to call repeatedly (pull to refresh,
+    /// returning to the app, after every write).
     func load() async {
         guard let client else {
             loadDemo()
             return
         }
-        isLoading = true
-        defer { isLoading = false }
+        if !hasData { loadState = .loading }
         do {
             let user = try await client.auth.session.user
             userID = user.id
+            accountEmail = user.email
             let today = LocalDate.string()
+            let yesterday = LocalDate.string(for: Calendar.current.date(byAdding: .day, value: -1, to: .now) ?? .now)
 
-            var profileRow = try await fetchProfile(client, user: user.id)
-            if profileRow.hasCompletedOnboarding {
-                // Creates today's / this week's quests if they don't exist yet.
-                try await client.rpc("generate_quests", params: ["p_today": today]).execute()
-                profileRow = try await fetchProfile(client, user: user.id)
-            }
+            // Starts the day on the server: tops Energy up to 4 and posts today's daily,
+            // this week's weekly and an active story quest (once onboarding is done).
+            try await client.rpc("generate_quests", params: ["p_today": today]).execute()
+            let profileRow = try await fetchProfile(client, user: user.id)
 
             async let statsRows: [StatsRow] = client.from("stats").select().execute().value
             async let itemRows: [ItemRow] = client.from("items").select().execute().value
             async let inventoryRows: [InventoryRow] = client.from("inventory").select("item_id, equipped").execute().value
             async let questRows: [QuestRow] = client.from("quests")
-                .select("id, kind, arc, title, rewards, starts_on, quest_objectives(id, position, name, detail, target, progress, is_complete)")
+                .select("id, kind, arc, title, rewards, starts_on, quest_objectives(id, position, name, detail, target, progress, is_complete, metric, exercise, min_reps, min_weight_lb)")
                 .lte("starts_on", value: today)
                 .gte("ends_on", value: today)
                 .order("starts_on", ascending: false)
@@ -164,6 +189,8 @@ final class GameStore {
             async let ingredientRows: [IngredientRow] = client.from("recipe_ingredients").select().execute().value
             async let mealRows: [MealLogRow] = client.from("meal_logs").select("calories, protein_g, carbs_g, fat_g")
                 .eq("eaten_on", value: today).execute().value
+            async let sleepRows: [SleepLogRow] = client.from("sleep_logs").select("night_of, hours")
+                .gte("night_of", value: yesterday).order("night_of", ascending: false).limit(1).execute().value
 
             catalog = Dictionary(try await itemRows.compactMap(\.item).map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
             let owned = try await inventoryRows
@@ -198,9 +225,19 @@ final class GameStore {
                               fat: meals.map(\.fatG).reduce(0, +)),
                 target: profileRow.targets
             )
+            lastNightSleepHours = try await sleepRows.first?.hours
             isSignedIn = true
+            loadState = .loaded
+            refreshError = nil
+        } catch is CancellationError {
+            // A newer refresh replaced this one; keep whatever is on screen.
         } catch {
-            errorMessage = Self.message(for: error)
+            let message = Self.message(for: error)
+            if hasData {
+                refreshError = message
+            } else {
+                loadState = .failed(message)
+            }
         }
     }
 
@@ -223,7 +260,9 @@ final class GameStore {
         recipes = Recipe.samples
         rations = .sample
         unlockedExam = .sample
+        lastNightSleepHours = 7.5
         isSignedIn = true
+        loadState = .loaded
     }
 
     // MARK: - Onboarding
@@ -345,10 +384,13 @@ final class GameStore {
 
     /// Uploads a finished workout's sets, then asks the server to award XP, stats and
     /// quest progress. For the upcoming Workout session screen.
-    func submitWorkout(sets: [LoggedSet], questID: String? = nil, isExam: Bool = false) async -> Bool {
-        guard let client else { return true }
+    /// Returns the server's payout, or nil (with `errorMessage` set) if it couldn't be saved.
+    func submitWorkout(sets: [LoggedSet], questID: String? = nil, isExam: Bool = false) async -> WorkoutResult? {
+        guard let client else {
+            return WorkoutResult(xpGained: min(10 * sets.count, 300), sets: sets.count)
+        }
         let workoutID = UUID()
-        return await perform {
+        do {
             try await client.from("workouts").insert(NewWorkout(
                 id: workoutID,
                 quest_id: questID.flatMap(UUID.init(uuidString:)),
@@ -358,7 +400,13 @@ final class GameStore {
             try await client.from("workout_sets").insert(sets.map {
                 NewWorkoutSet(workout_id: workoutID, exercise: $0.exercise, weight_lb: $0.weightLb, reps: $0.reps)
             }, returning: .minimal).execute()
-            try await client.rpc("complete_workout", params: ["p_workout_id": workoutID]).execute()
+            let result: WorkoutResult = try await client.rpc("complete_workout", params: ["p_workout_id": workoutID])
+                .execute().value
+            await load()
+            return result
+        } catch {
+            errorMessage = Self.message(for: error)
+            return nil
         }
     }
 
@@ -384,10 +432,22 @@ final class GameStore {
 }
 
 /// One set as entered in the Workout session.
-struct LoggedSet {
+struct LoggedSet: Identifiable, Hashable {
+    var id = UUID()
     let exercise: String
     let weightLb: Double
     let reps: Int
+}
+
+/// What `complete_workout` paid out.
+nonisolated struct WorkoutResult: Decodable, Sendable {
+    let xpGained: Int
+    let sets: Int
+
+    enum CodingKeys: String, CodingKey {
+        case sets
+        case xpGained = "xp_gained"
+    }
 }
 
 // MARK: - RPC parameters

@@ -75,7 +75,7 @@ extension PlayerProfile {
         xp: 20_340,
         levelStartXP: 18_200,
         nextLevelXP: 21_000,
-        energy: 3,
+        energy: EnergyRules.dailyStart,
         maxEnergy: 5,
         bodyweightLb: 185,
         stats: [.strength: 42, .endurance: 28, .speed: 19, .agility: 23, .vitality: 35],
@@ -86,7 +86,28 @@ extension PlayerProfile {
     /// Shown for a moment while a signed-in player's profile loads.
     static let empty = PlayerProfile(
         displayName: "Adventurer", guildClass: .warrior, rank: "F", level: 1,
-        xp: 0, levelStartXP: 0, nextLevelXP: 200, energy: 0, maxEnergy: 5, bodyweightLb: nil,
+        xp: 0, levelStartXP: 0, nextLevelXP: 200, energy: EnergyRules.dailyStart, maxEnergy: 5, bodyweightLb: nil,
         stats: [:], equipped: [], hasCompletedOnboarding: false
     )
+}
+
+// MARK: - Daily rules (mirror the server; see supabase/migrations)
+
+/// Energy: every player starts each day with at least this much (generate_quests).
+/// Each dungeon run spends 1; logging workouts, cardio or 7h+ sleep adds 1, up to the max.
+enum EnergyRules {
+    static let dailyStart = 4
+}
+
+/// Sleep: a night of at least this many hours earns Well-Rested and +1 Energy
+/// (after_sleep_logged trigger).
+enum Recovery {
+    static let wellRestedHours = 7.0
+
+    /// "Last night: 7.5 h · Well-Rested", or the goal when nothing is logged yet.
+    static func summary(lastNight hours: Double?) -> String {
+        guard let hours else { return "Sleep \(wellRestedHours.formatted())+ hours to earn Well-Rested" }
+        let slept = "Last night: \(hours.formatted(.number.precision(.fractionLength(0...1)))) h"
+        return hours >= wellRestedHours ? "\(slept) · Well-Rested" : "\(slept) · aim for \(wellRestedHours.formatted())+"
+    }
 }

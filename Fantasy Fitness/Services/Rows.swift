@@ -149,10 +149,16 @@ nonisolated struct QuestObjectiveRow: Decodable, Sendable {
     let target: Double
     let progress: Double
     let isComplete: Bool
+    let metric: String
+    let exercise: String?
+    let minReps: Int?
+    let minWeightLb: Double?
 
     enum CodingKeys: String, CodingKey {
-        case id, position, name, detail, target, progress
+        case id, position, name, detail, target, progress, metric, exercise
         case isComplete = "is_complete"
+        case minReps = "min_reps"
+        case minWeightLb = "min_weight_lb"
     }
 
     var objective: QuestObjective {
@@ -163,7 +169,11 @@ nonisolated struct QuestObjectiveRow: Decodable, Sendable {
             id: id.uuidString,
             name: name,
             detail: showsCount ? [detail, count].filter { !$0.isEmpty }.joined(separator: " · ") : detail,
-            isComplete: isComplete
+            isComplete: isComplete,
+            lift: metric == "lift" ? exercise.map {
+                LiftTarget(exercise: $0, sets: Int(target), minReps: minReps ?? 1,
+                           minWeightLb: minWeightLb ?? 0, setsDone: Int(progress))
+            } : nil
         )
     }
 }
@@ -309,6 +319,10 @@ nonisolated struct IngredientRow: Decodable, Sendable {
         case position, name, amount
         case recipeID = "recipe_id"
     }
+}
+
+nonisolated struct SleepLogRow: Decodable, Sendable {
+    let hours: Double
 }
 
 nonisolated struct MealLogRow: Decodable, Sendable {

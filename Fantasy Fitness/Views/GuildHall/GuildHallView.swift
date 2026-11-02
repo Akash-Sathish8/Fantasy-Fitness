@@ -12,6 +12,7 @@ struct GuildHallView: View {
 
     @Environment(GameStore.self) private var store
     @State private var showingSettings = false
+    @State private var activeWorkout: ActiveWorkout?
 
     private var profile: PlayerProfile { store.player }
     private var rations: DailyRations { store.rations }
@@ -42,9 +43,16 @@ struct GuildHallView: View {
                 DashedDivider()
                 TodayRow(palette: .sapphire, systemImage: "moon.zzz.fill",
                          title: "Rest at the inn",
-                         detail: "Sleep 8 hours · earns Well-Rested",
-                         progress: nil)
+                         detail: Recovery.summary(lastNight: store.lastNightSleepHours),
+                         progress: store.lastNightSleepHours.map { $0 / Recovery.wellRestedHours })
             }
+
+            Button {
+                activeWorkout = ActiveWorkout(quest: store.quests[.daily].flatMap { $0.liftPlan.isEmpty ? nil : $0 })
+            } label: {
+                Label("Log a workout", systemImage: "dumbbell.fill")
+            }
+            .buttonStyle(.chunky(.wax))
 
             BoardSectionHeader(title: "Energy")
             EnergyCard(energy: profile.energy, maxEnergy: profile.maxEnergy)
@@ -67,6 +75,7 @@ struct GuildHallView: View {
             .buttonStyle(.chunky(.wood, fontSize: 18))
             .padding(.top, 12)
         }
+        .workoutSessionCover($activeWorkout)
         .sheet(isPresented: $showingSettings) {
             SettingsSheet(onLogOut: {
                 showingSettings = false
@@ -148,7 +157,8 @@ private struct EnergyCard: View {
                 }
                 Spacer(minLength: 0)
             }
-            Text("Spend Energy in dungeons. Refill it by logging a workout or sleeping 7+ hours.")
+            Text("You start each day with \(EnergyRules.dailyStart) Energy. Each dungeon run uses 1. "
+                 + "Logging a workout, cardio or \(Recovery.wellRestedHours.formatted())+ hours of sleep adds 1.")
                 .font(.alegreyaSans(15))
                 .foregroundStyle(Theme.inkSecondary)
                 .padding(.top, 10)

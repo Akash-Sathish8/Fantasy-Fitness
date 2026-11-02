@@ -8,7 +8,6 @@ import SwiftUI
 /// Side notes pinned below the featured quest: nutrition, sleep and guild notices.
 struct PinnedNotesGrid: View {
     @Environment(GameStore.self) private var store
-    private let sleepGoalHours = 8
 
     private var rations: DailyRations { store.rations }
 
@@ -33,12 +32,13 @@ struct PinnedNotesGrid: View {
                 .accessibilityLabel("Ration duty. Protein today, \(rations.eaten.protein) of \(rations.target.protein) grams")
 
                 PinnedNote(rotation: 1.2) {
-                    NoteHeading(title: "Rest at the inn", subtitle: "Sleep goal tonight")
-                    Text("\(sleepGoalHours) hours")
+                    NoteHeading(title: "Rest at the inn", subtitle: "Sleep goal each night")
+                    Text("\(Recovery.wellRestedHours.formatted())+ hours")
                         .font(.alegreyaSans(22, weight: .bold))
                         .foregroundStyle(Theme.ink)
                         .padding(.top, 6)
-                    Text("Earns Well-Rested buff")
+                    Text(store.lastNightSleepHours == nil ? "Earns Well-Rested buff"
+                                                          : Recovery.summary(lastNight: store.lastNightSleepHours))
                         .font(.alegreyaSans(15, weight: .bold))
                         .foregroundStyle(Theme.positiveText)
                         .padding(.top, 4)

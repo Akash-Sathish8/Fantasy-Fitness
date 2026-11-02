@@ -14,9 +14,36 @@ enum AppTab: Hashable {
 struct ContentView: View {
     let onLogOut: () -> Void
 
+    @Environment(GameStore.self) private var store
+    @Environment(\.scenePhase) private var scenePhase
     @State private var selectedTab: AppTab = .guildHall
 
     var body: some View {
+        Group {
+            if store.hasData {
+                tabs
+            } else if case .failed(let message) = store.loadState {
+                BoardStatusView(title: "Can't reach the guild", message: message, systemImage: "wifi.slash") {
+                    Button("Try again") { Task { await store.load() } }
+                        .buttonStyle(.chunky(.wax))
+                    Button("Log out", action: onLogOut)
+                        .buttonStyle(.chunky(.wood, minHeight: 48, fontSize: 17))
+                }
+            } else {
+                BoardStatusView(loadingTitle: "Opening the guild hall…",
+                                message: "Fetching your quests, gear and rations.")
+            }
+        }
+        .task { if !store.hasData { await store.load() } }
+        // Coming back to the app (often on a new day) refreshes Energy and quests.
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { Task { await store.load() } }
+        }
+        // Dark scheme keeps the glass tab bar and status bar dark over the wood board.
+        .preferredColorScheme(.dark)
+    }
+
+    private var tabs: some View {
         TabView(selection: $selectedTab) {
             Tab("Guild Hall", systemImage: "building.columns", value: .guildHall) {
                 NavigationStack {
@@ -37,8 +64,6 @@ struct ContentView: View {
             }
         }
         .tint(Theme.gold)
-        // Dark scheme keeps the glass tab bar and status bar dark over the wood board.
-        .preferredColorScheme(.dark)
     }
 }
 

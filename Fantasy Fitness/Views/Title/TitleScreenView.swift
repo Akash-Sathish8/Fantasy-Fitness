@@ -91,7 +91,9 @@ struct TitleScreenView: View {
             Button {
                 Task { await logIn() }
             } label: {
-                TitleButtonLabel(title: "Log in", subtitle: "Return to the guild hall", systemImage: "person.fill")
+                TitleButtonLabel(title: isResuming ? "Opening the gate…" : "Log in",
+                                 subtitle: isResuming ? "Loading your guild data" : "Return to the guild hall",
+                                 systemImage: isResuming ? "hourglass" : "person.fill")
             }
             .buttonStyle(.chunky(.gold, minHeight: 68))
             .disabled(isResuming)

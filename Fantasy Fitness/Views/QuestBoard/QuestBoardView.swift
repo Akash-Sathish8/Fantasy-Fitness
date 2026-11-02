@@ -7,6 +7,7 @@ import SwiftUI
 
 struct QuestBoardView: View {
     @State private var selectedKind: QuestKind = .daily
+    @State private var activeWorkout: ActiveWorkout?
 
     @Environment(GameStore.self) private var store
 
@@ -17,7 +18,9 @@ struct QuestBoardView: View {
             WoodSegmentedPicker(options: QuestKind.allCases, selection: $selectedKind, title: \.title)
             if let quest = store.quests[selectedKind] {
                 QuestScroll(quest: quest) {
-                    // TODO: present Workout session via .fullScreenCover
+                    // Daily quests open the logger with their lifts; weekly / story progress
+                    // comes from any logged workout, so those open a free session.
+                    activeWorkout = ActiveWorkout(quest: quest.kind == .daily ? quest : nil)
                 }
                 .padding(.top, 4)
             } else {
@@ -29,6 +32,7 @@ struct QuestBoardView: View {
             PinnedNotesGrid()
                 .padding(.top, 8)
         }
+        .workoutSessionCover($activeWorkout)
     }
 }
 

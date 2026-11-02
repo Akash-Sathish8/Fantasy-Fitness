@@ -5,16 +5,30 @@
 
 import SwiftUI
 
-/// Placeholder settings (profile, sync, units). Reachable from Title and Guild Hall.
+/// Account and connection details. Reachable from Title and Guild Hall; editing
+/// the profile is still to come.
 struct SettingsSheet: View {
     /// Shown only once signed in (from the Guild Hall).
     var onLogOut: (() -> Void)? = nil
 
+    @Environment(GameStore.self) private var store
+
+    private var syncStatus: String {
+        if store.isDemo { return "Demo mode" }
+        if !store.isSignedIn { return "Not signed in" }
+        return store.refreshError == nil ? "Connected" : "Offline"
+    }
+
     var body: some View {
         SheetScaffold(title: "Settings") {
             VStack(spacing: 0) {
-                row("Profile", detail: "Coming soon", systemImage: "person.fill")
-                row("Sync", detail: "Coming soon", systemImage: "arrow.triangle.2.circlepath")
+                row("Profile", detail: store.isSignedIn ? store.player.displayName : "Not signed in",
+                    systemImage: "person.fill")
+                if let email = store.accountEmail {
+                    row("Account", detail: email, systemImage: "envelope.fill")
+                }
+                row("Sync", detail: syncStatus, systemImage: "arrow.triangle.2.circlepath")
+                // All weights are stored in pounds (bodyweight_lb, weight_lb).
                 row("Units", detail: "lb", systemImage: "scalemass.fill")
             }
 
@@ -41,6 +55,8 @@ struct SettingsSheet: View {
             Text(detail)
                 .font(.alegreyaSans(16))
                 .foregroundStyle(Theme.inkSecondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
         }
         .frame(minHeight: 56)
         .overlay(alignment: .bottom) {
@@ -50,5 +66,5 @@ struct SettingsSheet: View {
 }
 
 #Preview {
-    Text("Title").sheet(isPresented: .constant(true)) { SettingsSheet(onLogOut: {}) }
+    Text("Title").sheet(isPresented: .constant(true)) { SettingsSheet(onLogOut: {}).environment(GameStore.preview) }
 }

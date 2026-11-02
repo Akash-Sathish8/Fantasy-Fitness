@@ -21,8 +21,8 @@ enum QuestKind: String, CaseIterable, Identifiable {
     var actionLabel: String {
         switch self {
         case .daily: "Begin quest"
-        case .weekly: "View progress"
-        case .story: "Continue story"
+        // Weekly and story progress already shows on the scroll; their button logs a workout.
+        case .weekly, .story: "Log a workout"
         }
     }
 }
@@ -33,6 +33,22 @@ struct QuestObjective: Identifiable {
     let name: String
     let detail: String
     let isComplete: Bool
+    /// Set for lifting objectives; drives the Workout session plan.
+    var lift: LiftTarget? = nil
+}
+
+/// What a lifting objective asks for. A set counts when it meets both minimums.
+struct LiftTarget: Hashable {
+    /// Must match the logged exercise name (the server compares case-insensitively).
+    let exercise: String
+    let sets: Int
+    let minReps: Int
+    var minWeightLb: Double = 0
+    var setsDone = 0
+
+    func counts(reps: Int, weightLb: Double) -> Bool {
+        reps >= minReps && weightLb >= minWeightLb
+    }
 }
 
 struct Quest: Identifiable {
@@ -50,6 +66,9 @@ struct Quest: Identifiable {
     }
 
     var kicker: String { "\(kind.title) quest · \(arc)" }
+
+    /// Lifts this quest asks for, in order; empty for cardio, rest and nutrition quests.
+    var liftPlan: [LiftTarget] { objectives.compactMap(\.lift) }
 }
 
 // MARK: - Sample data (previews and offline demo mode)
@@ -60,10 +79,14 @@ extension Quest {
         arc: "Iron Trial, week 3",
         title: "Push Day",
         objectives: [
-            QuestObjective(name: "Bench press", detail: "4 × 6 @ 155 lb", isComplete: true),
-            QuestObjective(name: "Overhead press", detail: "3 × 8 @ 95 lb", isComplete: false),
-            QuestObjective(name: "Incline dumbbell press", detail: "3 × 10 @ 50 lb", isComplete: false),
-            QuestObjective(name: "Triceps dips", detail: "3 × 12", isComplete: false),
+            QuestObjective(name: "Bench press", detail: "4 × 6 @ 155 lb", isComplete: true,
+                           lift: LiftTarget(exercise: "Bench press", sets: 4, minReps: 6, minWeightLb: 155, setsDone: 4)),
+            QuestObjective(name: "Overhead press", detail: "3 × 8 @ 95 lb", isComplete: false,
+                           lift: LiftTarget(exercise: "Overhead press", sets: 3, minReps: 8, minWeightLb: 95)),
+            QuestObjective(name: "Incline dumbbell press", detail: "3 × 10 @ 50 lb", isComplete: false,
+                           lift: LiftTarget(exercise: "Incline dumbbell press", sets: 3, minReps: 10, minWeightLb: 50)),
+            QuestObjective(name: "Triceps dips", detail: "3 × 12", isComplete: false,
+                           lift: LiftTarget(exercise: "Triceps dips", sets: 3, minReps: 12)),
         ],
         rewards: ["+120 XP", "+ Strength", "Common chest"]
     )

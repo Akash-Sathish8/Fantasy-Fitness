@@ -32,9 +32,10 @@ Supabase is the backend. Everything the game needs is stored there; the app has 
 **Files**
 - `supabase/migrations/20261022000000_initial_schema.sql`: tables, row-level security, column grants, triggers, server functions, storage buckets.
 - `supabase/migrations/20261022000100_catalog_data.sql`: items, dungeons, rank exams, quest templates, starter recipes. Safe to re-run.
+- `supabase/migrations/20261101000000_daily_energy.sql`: daily Energy top-up, 4 starting Energy, every dungeon costs 1. Safe to re-run.
 - `Fantasy Fitness/Config/Secrets.plist` (gitignored, never commit): `SUPABASE_URL` and `SUPABASE_ANON_KEY`. Copy `Secrets.example.plist` from the repo root to create it. Only the anon/publishable key goes in the app, never the service-role key.
 - `Fantasy Fitness/Services/`: `SupabaseConfig.swift` (reads the secrets, builds the client), `Rows.swift` (Codable row types and mapping to models), `GameStore.swift` (the single `@Observable` store all views read from via `@Environment(GameStore.self)`).
-- Without a valid `Secrets.plist` the app runs in **offline demo mode** on the sample data in `Models/`; previews use `GameStore.preview`.
+- Without a valid `Secrets.plist` the app runs in **offline demo mode** on the sample data in `Models/` (a banner says so); previews use `GameStore.preview`. With keys, every screen shows real data from Supabase; sample data is never shown to a signed-in player.
 
 **Schema**
 - Players: `profiles` (name, class, rank, xp, generated `level` / `level_start_xp` / `next_level_xp`, energy, bodyweight, macro targets with a 1200 kcal floor, `has_completed_onboarding`), `stats`, `inventory` (one row per owned item, `equipped`).
@@ -52,9 +53,23 @@ Supabase is the backend. Everything the game needs is stored there; the app has 
 - Stat formulas are placeholders (Strength from best Epley 1RM / bodyweight, Endurance from cardio minutes, Vitality from 7h+ nights) and only ever go up.
 - Known gap: dungeon battles are simulated on the device and the client reports victory. Move resolution server-side before anything competitive.
 
+**New account starting values**
+- Created by the `on_auth_user_created` trigger: rank F, level 1, 0 XP, **4 Energy** (max 5), all stats 0, starter gear equipped (Iron Helm, Leather Jerkin, Oak Longsword, Copper Ring), default targets 2,400 kcal / 140 g protein / 260 g carbs / 70 g fat.
+- No quests until onboarding. `complete_onboarding` saves class, name and bodyweight, then posts the first quests based on the class: a daily (rotates through the class's workouts plus a rest day), a weekly (Forge Week; Rangers get Miles on the Map) and the first four-week story arc (The Iron Trial).
+
+**Daily loop**
+- The app calls `generate_quests(p_today)` on every load (sign-in, returning to the app, pull to refresh). Once per local day it tops Energy up to **4** (anything banked above 4 is kept, up to max 5) and posts any missing daily/weekly/story quest. Dates more than a day away from the server's date are rejected.
+- Energy: each dungeon run costs **1**. Logging a workout, any cardio, or a 7+ hour night adds 1 (up to max). Sleep of 7+ hours also earns Well-Rested.
+- The app mirrors these numbers for display only in `EnergyRules` / `Recovery` (`Models/PlayerProfile.swift`); the server is the source of truth.
+
+**Loading and error states**
+- `GameStore.loadState` is `idle / loading / loaded / failed`. Until the first load succeeds, the tab shell shows a full-screen board: "Opening the guild hall…" while loading, or "Can't reach the guild" with Try again / Log out on failure (`Components/BoardStatus.swift`).
+- After data has loaded, a failed refresh keeps the last good data on screen and shows a "Couldn't refresh" banner with Retry at the top of each root board. Pull to refresh works on every root board. Sync status also shows in Settings.
+- Sign-in only completes once data loads; if it can't, the login sheet shows the reason. Individual writes (equip, log meal, rate, dungeon run) disable their button while saving and show an alert if they fail.
+
 **Setup for a new project**
 1. Create a project at supabase.com.
-2. Run both migration files in order (SQL Editor, or `supabase link` + `supabase db push`).
+2. Run every file in `supabase/migrations/` in name order (SQL Editor, or `supabase link` + `supabase db push`).
 3. Put the Project URL and anon key in `Config/Secrets.plist`.
 4. Auth providers: Email is on by default. Apple needs the bundle ID `com.appteamcarolina.Fantasy-Fitness` under Client IDs plus the Sign in with Apple capability in Xcode. Google needs a Google Cloud OAuth client. Add `fantasyfitness://login-callback` under Authentication → URL Configuration → Redirect URLs.
 
@@ -66,7 +81,7 @@ Supabase is the backend. Everything the game needs is stored there; the app has 
 
 **Classes:** Warrior (strength), Ranger (endurance), Monk (calisthenics), Paladin (hybrid). Class sets default routine and bonus XP.
 
-**Core loop:** Train → Grow (level, stats, unlock exams) → Fight (dungeons/bosses, costs Energy) → Loot → Train. Energy refills only from real activity and sleep.
+**Core loop:** Train → Grow (level, stats, unlock exams) → Fight (dungeons/bosses, costs Energy) → Loot → Train. Every day starts with 4 Energy; each dungeon run costs 1; real activity and sleep add more.
 
 **Quests:** generated from the chosen program. Types: Daily, Weekly, Story (multi-week arcs tied to a program block, include deloads), Side. Each covers training, nutrition, and recovery.
 
@@ -97,7 +112,14 @@ Notes:
 - **Loot reveal** is shared by Quests and Dungeons: build once as a reusable view/modal.
 - **Workout session** and **Battle** are presented with `.fullScreenCover` (tab bar hidden).
 - **Rank exams** appear as a card on the Quest board and launch Workout session in "exam mode."
-- Quest board "Begin quest" button opens Workout session (log weight/reps per set, rest timer) → Quest complete (XP, stat gains) → Loot reveal. Label varies by tab: Daily "Begin quest", Weekly "View progress", Story "Continue story".
+- Quest board "Begin quest" button opens Workout session (log weight/reps per set, rest timer) → Quest complete (XP, stat gains) → Loot reveal. Label varies by tab: Daily "Begin quest"; Weekly and Story "Log a workout" (their progress shows on the scroll). The Guild Hall also has a "Log a workout" button.
+
+**Workout session** (`Views/Workout/`)
+- `WorkoutSession` (state) + `WorkoutSessionView` (UI), presented with `.workoutSessionCover($activeWorkout)`. A daily quest opens with its lifts as the plan (exercise, sets, min reps / weight from `quest_objectives`); other entry points open a free session. "Add" adds any exercise.
+- The big title is the current exercise and slides to the new name whenever it changes: tapping an exercise chip, adding one, or finishing the last required set of a lift (auto-advances to the next unfinished lift).
+- Log set = weight × reps (steppers, prefilled from the last set or the quest minimum). Sets below the quest minimum are still logged but marked as not counting.
+- Rest timer (`RestTimerCard` / `RestTimer`) starts automatically after every logged set: ring countdown, −15 s / pause / +30 s / skip, preset lengths 1:00–3:00 (default 1:30), haptic when it ends. It stores an end time, so it stays correct in the background.
+- Nothing is sent until **Finish workout**: inserts `workouts` + `workout_sets`, then `complete_workout` returns XP; the store reloads so quest progress, stats and Energy update. Closing with unsaved sets asks to discard.
 
 ## Visual style (Quest Board reference)
 

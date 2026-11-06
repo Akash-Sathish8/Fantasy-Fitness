@@ -16,7 +16,8 @@ struct SettingsSheet: View {
     private var syncStatus: String {
         if store.isDemo { return "Demo mode" }
         if !store.isSignedIn { return "Not signed in" }
-        return store.refreshError == nil ? "Connected" : "Offline"
+        if store.sync.isOffline { return "Offline" }
+        return store.refreshError == nil ? "Connected" : "Couldn't refresh"
     }
 
     var body: some View {
@@ -28,6 +29,13 @@ struct SettingsSheet: View {
                     row("Account", detail: email, systemImage: "envelope.fill")
                 }
                 row("Sync", detail: syncStatus, systemImage: "arrow.triangle.2.circlepath")
+                if let summary = store.sync.queueSummary {
+                    row("Queue", detail: summary, systemImage: "tray.and.arrow.up.fill")
+                }
+                if let lastSynced = store.sync.lastSyncedAt {
+                    row("Last synced", detail: lastSynced.formatted(.relative(presentation: .named)),
+                        systemImage: "clock.fill")
+                }
                 // All weights are stored in pounds (bodyweight_lb, weight_lb).
                 row("Units", detail: "lb", systemImage: "scalemass.fill")
             }

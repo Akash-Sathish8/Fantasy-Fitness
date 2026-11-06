@@ -3,8 +3,10 @@
 //  Fantasy Fitness
 //
 //  Full-screen workout logger: pick an exercise, log weight × reps per set, rest with
-//  the timer, then finish to send the sets to the server, which awards XP, stats and
-//  quest progress. The title follows the current exercise.
+//  the timer, then finish to queue the workout for upload. The server awards XP, stats
+//  and quest progress, so offline the summary says rewards are pending instead of
+//  guessing. Every set is saved to the device as it's logged. The title follows the
+//  current exercise.
 //
 
 import SwiftUI
@@ -21,20 +23,26 @@ struct WorkoutSessionView: View {
     @State private var newExerciseName = ""
     @State private var confirmingDiscard = false
     @State private var isSubmitting = false
-    @State private var result: WorkoutResult?
+    @State private var outcome: WorkoutOutcome?
+    @State private var showingLoot = false
 
-    init(quest: Quest?, onClose: @escaping () -> Void) {
+    init(quest: Quest?, draft: WorkoutDraft? = nil, onClose: @escaping () -> Void) {
         self.quest = quest
         self.onClose = onClose
-        _session = State(initialValue: WorkoutSession(quest: quest))
+        _session = State(initialValue: WorkoutSession(quest: quest, draft: draft))
     }
 
     var body: some View {
         Group {
-            if let result {
-                WorkoutCompleteView(result: result, quest: store.quests[.daily].flatMap { $0.id == quest?.id ? $0 : nil },
+            switch outcome {
+            case .paid(let result) where showingLoot:
+                LootRevealView(loot: store.lootDrop(for: result), onCollect: onClose)
+            case .some(let outcome):
+                WorkoutCompleteView(outcome: outcome, setCount: session.sets.count,
+                                    quest: store.quests[.daily].flatMap { $0.id == quest?.id ? $0 : nil },
+                                    onOpenChest: { withAnimation(.snappy) { showingLoot = true } },
                                     onDone: onClose)
-            } else {
+            case nil:
                 logger
             }
         }
@@ -51,15 +59,20 @@ struct WorkoutSessionView: View {
             Text("Sets for exercises outside the quest still count toward your weekly workouts and Strength.")
         }
         .confirmationDialog("Leave this workout?", isPresented: $confirmingDiscard, titleVisibility: .visible) {
-            Button("Discard \(session.sets.count) logged sets", role: .destructive, action: onClose)
+            Button("Keep for later", action: onClose)
+            Button("Discard \(LoggedSet.countLabel(session.sets.count))", role: .destructive) {
+                store.discardWorkout(session)
+                onClose()
+            }
         } message: {
-            Text("Sets are only saved when you finish the workout.")
+            Text("Your sets are saved on this device, so you can resume this workout later.")
         }
         .onChange(of: session.currentName, initial: true) { _, name in
             weight = session.suggestedWeight(for: name)
             reps = session.suggestedReps(for: name)
         }
         .sensoryFeedback(.success, trigger: session.sets.count) { old, new in new > old }
+        .holdsRewardReveals()
     }
 
     // MARK: - Logger
@@ -126,7 +139,7 @@ struct WorkoutSessionView: View {
 
     private var progressText: String {
         let planned = session.exercises.filter { $0.target != nil }
-        guard !planned.isEmpty else { return "\(session.sets.count) sets" }
+        guard !planned.isEmpty else { return LoggedSet.countLabel(session.sets.count) }
         return "\(planned.filter(session.isDone).count) of \(planned.count) lifts"
     }
 
@@ -206,7 +219,7 @@ struct WorkoutSessionView: View {
                 ValueStepper(title: "Weight (lb)", value: weightText, step: "5") {
                     weight = max(weight - 5, 0)
                 } onIncrement: {
-                    weight += 5
+                    weight = min(weight + 5, Self.maxWeightLb)
                 }
                 ValueStepper(title: "Reps", value: "\(reps)", step: "1") {
                     reps = max(reps - 1, 1)
@@ -225,7 +238,9 @@ struct WorkoutSessionView: View {
             }
 
             Button {
-                withAnimation(.snappy) { session.logSet(weightLb: weight, reps: reps) }
+                withAnimation(.snappy) {
+                    if let set = session.logSet(weightLb: weight, reps: reps) { store.saveSet(set, in: session) }
+                }
             } label: {
                 Label("Log set \(session.sets(for: exercise.name).count + 1)", systemImage: "checkmark")
             }
@@ -233,6 +248,9 @@ struct WorkoutSessionView: View {
             .padding(.top, 14)
         }
     }
+
+    /// The server refuses heavier sets, which would leave the workout stuck in the queue.
+    private static let maxWeightLb = 2000.0
 
     private var weightText: String {
         weight.formatted(.number.precision(.fractionLength(0...1)))
@@ -262,6 +280,7 @@ struct WorkoutSessionView: View {
                             Spacer()
                             Button {
                                 withAnimation(.snappy) { session.removeSet(set) }
+                                store.removeSet(set, in: session)
                             } label: {
                                 Image(systemName: "trash")
                                     .font(.system(size: 15, weight: .bold))
@@ -302,7 +321,7 @@ struct WorkoutSessionView: View {
             if isSubmitting {
                 ProgressView().tint(Theme.cream)
             } else {
-                Label(session.hasSets ? "Finish workout · \(session.sets.count) sets" : "Log a set to finish",
+                Label(session.hasSets ? "Finish workout · \(LoggedSet.countLabel(session.sets.count))" : "Log a set to finish",
                       systemImage: "flag.checkered")
             }
         }
@@ -317,9 +336,8 @@ struct WorkoutSessionView: View {
         isSubmitting = true
         defer { isSubmitting = false }
         session.restTimer.stop()
-        if let payout = await store.submitWorkout(sets: session.sets, questID: session.questID) {
-            withAnimation(.snappy) { result = payout }
-        }
+        let finished = await store.finishWorkout(session)
+        withAnimation(.snappy) { outcome = finished }
     }
 }
 
@@ -372,41 +390,57 @@ private struct ValueStepper: View {
     }
 }
 
-/// Summary after the server accepts the workout.
+/// Summary after finishing: the server's payout, or a pending note if it hasn't seen the
+/// workout yet. Rewards are never estimated on the device.
 private struct WorkoutCompleteView: View {
-    let result: WorkoutResult
+    let outcome: WorkoutOutcome
+    let setCount: Int
     /// The refreshed quest, if this workout was for one.
     let quest: Quest?
+    let onOpenChest: () -> Void
     let onDone: () -> Void
+
+    private var result: WorkoutResult? {
+        if case .paid(let result) = outcome { result } else { nil }
+    }
 
     var body: some View {
         VStack(spacing: 22) {
             Spacer()
-            Text(quest?.progress == 1 ? "Quest complete" : "Workout logged")
+            Text(quest?.progress == 1 && result != nil ? "Quest complete" : "Workout logged")
                 .font(.pirata(44))
                 .foregroundStyle(Theme.gold)
                 .shadow(color: Theme.darkestWood, radius: 0, x: 0, y: 3)
                 .accessibilityAddTraits(.isHeader)
             ParchmentCard {
-                HStack {
-                    NoteHeading(title: "\(result.sets) sets logged", subtitle: "XP and stats are worked out by the guild.")
-                    Spacer()
-                    TagChip(label: "+\(result.xpGained) XP", systemImage: "star.fill")
-                }
-                if let quest {
-                    DashedDivider().padding(.vertical, 12)
-                    KickerText(quest.title)
-                    ParchmentProgressBar(progress: quest.progress)
-                        .padding(.top, 6)
-                    Text("\(quest.completedCount) of \(quest.objectives.count) objectives done"
-                         + (quest.progress == 1 ? " · reward chest added to your inventory" : ""))
-                        .font(.alegreyaSans(15, weight: .medium))
-                        .foregroundStyle(Theme.inkSecondary)
-                        .padding(.top, 6)
+                if let result {
+                    HStack {
+                        NoteHeading(title: "\(LoggedSet.countLabel(result.sets)) logged", subtitle: "XP and stats are worked out by the guild.")
+                        Spacer()
+                        TagChip(label: "+\(result.xpGained) XP", systemImage: "star.fill")
+                    }
+                    if let quest {
+                        DashedDivider().padding(.vertical, 12)
+                        KickerText(quest.title)
+                        ParchmentProgressBar(progress: quest.progress)
+                            .padding(.top, 6)
+                        Text("\(quest.completedCount) of \(quest.objectives.count) objectives done")
+                            .font(.alegreyaSans(15, weight: .medium))
+                            .foregroundStyle(Theme.inkSecondary)
+                            .padding(.top, 6)
+                    }
+                } else {
+                    NoteHeading(title: "\(LoggedSet.countLabel(setCount)) saved on this device",
+                                subtitle: "Rewards pending, will sync when you're back online.")
                 }
             }
-            Button("Back to the board", action: onDone)
-                .buttonStyle(.chunky(.emerald))
+            if let result, !result.itemIDs.isEmpty {
+                Button("Open chest", action: onOpenChest)
+                    .buttonStyle(.chunky(.gold))
+            } else {
+                Button("Back to the board", action: onDone)
+                    .buttonStyle(.chunky(.emerald))
+            }
             Spacer()
         }
         .padding(.horizontal, 24)
@@ -422,12 +456,13 @@ private struct WorkoutCompleteView: View {
 struct ActiveWorkout: Identifiable {
     let id = UUID()
     let quest: Quest?
+    var draft: WorkoutDraft? = nil
 }
 
 extension View {
     func workoutSessionCover(_ workout: Binding<ActiveWorkout?>) -> some View {
         fullScreenCover(item: workout) { active in
-            WorkoutSessionView(quest: active.quest) { workout.wrappedValue = nil }
+            WorkoutSessionView(quest: active.quest, draft: active.draft) { workout.wrappedValue = nil }
         }
     }
 }

@@ -26,19 +26,27 @@ struct BoardScreen<Content: View>: View {
         }
         .scrollIndicators(.hidden)
         .background(WoodBackground())
-        // Pull down on any root board to reload from Supabase.
+        // Pull down on any root board to upload the queue and reload from Supabase.
         .refreshable { if isRoot { await store.load() } }
         .toolbar(isRoot ? .hidden : .visible, for: .navigationBar)
         .toolbarBackground(.hidden, for: .navigationBar)
         .navigationBarTitleDisplayMode(.inline)
     }
 
-    /// Stale-data warning after a failed refresh, or a demo-mode reminder.
+    /// Offline or stale-data notice with what's waiting to upload, or a demo-mode reminder.
     @ViewBuilder
     private var connectionBanner: some View {
         if let refreshError = store.refreshError {
             StatusBanner(message: "Couldn't refresh, showing saved data. \(refreshError)",
                          actionTitle: "Retry") { Task { await store.load() } }
+        } else if store.sync.isOffline {
+            StatusBanner(message: ["You're offline, showing saved data.", store.sync.queueSummary]
+                .compactMap { $0 }.joined(separator: " "),
+                         systemImage: "wifi.slash", actionTitle: "Retry") { Task { await store.load() } }
+        } else if let uploadError = store.sync.uploadError, let summary = store.sync.queueSummary {
+            StatusBanner(message: "\(summary) \(uploadError)", actionTitle: "Retry") {
+                Task { await store.load() }
+            }
         } else if store.isDemo {
             StatusBanner(message: "Demo mode: sample data. Add Config/Secrets.plist to connect.",
                          systemImage: "theatermasks.fill")

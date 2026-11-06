@@ -4,13 +4,14 @@
 //
 //  Codable mirrors of the Supabase tables (see supabase/migrations) and their
 //  mapping into the app's models. Column names stay snake_case via CodingKeys.
+//  Rows are Codable both ways because the local cache stores them as they arrived.
 //
 
 import Foundation
 
 // MARK: - Players
 
-nonisolated struct ProfileRow: Decodable, Sendable {
+nonisolated struct ProfileRow: Codable, Sendable {
     let id: UUID
     let displayName: String
     let guildClass: String
@@ -66,7 +67,7 @@ nonisolated struct ProfileRow: Decodable, Sendable {
     }
 }
 
-nonisolated struct StatsRow: Decodable, Sendable {
+nonisolated struct StatsRow: Codable, Sendable {
     let strength: Int
     let endurance: Int
     let speed: Int
@@ -80,7 +81,7 @@ nonisolated struct StatsRow: Decodable, Sendable {
 
 // MARK: - Gear
 
-nonisolated struct ItemRow: Decodable, Sendable {
+nonisolated struct ItemRow: Codable, Sendable {
     let id: String
     let name: String
     let slot: String
@@ -94,7 +95,7 @@ nonisolated struct ItemRow: Decodable, Sendable {
     }
 }
 
-nonisolated struct InventoryRow: Decodable, Sendable {
+nonisolated struct InventoryRow: Codable, Sendable {
     let itemID: String
     let equipped: Bool
 
@@ -113,18 +114,20 @@ extension Rarity {
 
 // MARK: - Quests
 
-nonisolated struct QuestRow: Decodable, Sendable {
+nonisolated struct QuestRow: Codable, Sendable {
     let id: UUID
     let kind: String
     let arc: String
     let title: String
     let rewards: [String]
     let startsOn: String
+    let endsOn: String
     let objectives: [QuestObjectiveRow]
 
     enum CodingKeys: String, CodingKey {
         case id, kind, arc, title, rewards
         case startsOn = "starts_on"
+        case endsOn = "ends_on"
         case objectives = "quest_objectives"
     }
 
@@ -141,7 +144,7 @@ nonisolated struct QuestRow: Decodable, Sendable {
     }
 }
 
-nonisolated struct QuestObjectiveRow: Decodable, Sendable {
+nonisolated struct QuestObjectiveRow: Codable, Sendable {
     let id: UUID
     let position: Int
     let name: String
@@ -180,7 +183,7 @@ nonisolated struct QuestObjectiveRow: Decodable, Sendable {
 
 // MARK: - Dungeons and exams
 
-nonisolated struct DungeonRow: Decodable, Sendable {
+nonisolated struct DungeonRow: Codable, Sendable {
     let id: String
     let name: String
     let tier: String
@@ -217,7 +220,7 @@ nonisolated struct DungeonRow: Decodable, Sendable {
     }
 }
 
-nonisolated struct DungeonRunRow: Decodable, Sendable {
+nonisolated struct DungeonRunRow: Codable, Sendable {
     let dungeonID: String
 
     enum CodingKeys: String, CodingKey {
@@ -237,7 +240,7 @@ nonisolated struct RunResultRow: Decodable, Sendable {
     }
 }
 
-nonisolated struct RankExamRow: Decodable, Sendable {
+nonisolated struct RankExamRow: Codable, Sendable {
     let id: String
     let rank: String
     let lift: String
@@ -264,7 +267,7 @@ nonisolated enum GuildRank {
 
 // MARK: - Tavern
 
-nonisolated struct RecipeSummaryRow: Decodable, Sendable {
+nonisolated struct RecipeSummaryRow: Codable, Sendable {
     let id: UUID
     let authorID: UUID?
     let name: String
@@ -309,7 +312,7 @@ nonisolated struct RecipeSummaryRow: Decodable, Sendable {
     }
 }
 
-nonisolated struct IngredientRow: Decodable, Sendable {
+nonisolated struct IngredientRow: Codable, Sendable {
     let recipeID: UUID
     let position: Int
     let name: String
@@ -321,11 +324,17 @@ nonisolated struct IngredientRow: Decodable, Sendable {
     }
 }
 
-nonisolated struct SleepLogRow: Decodable, Sendable {
+nonisolated struct SleepLogRow: Codable, Sendable {
+    let nightOf: String
     let hours: Double
+
+    enum CodingKeys: String, CodingKey {
+        case hours
+        case nightOf = "night_of"
+    }
 }
 
-nonisolated struct MealLogRow: Decodable, Sendable {
+nonisolated struct MealLogRow: Codable, Sendable {
     let calories: Int
     let proteinG: Int
     let carbsG: Int
@@ -339,13 +348,29 @@ nonisolated struct MealLogRow: Decodable, Sendable {
     }
 }
 
-// MARK: - Writes
+// MARK: - Local cache
 
-nonisolated struct NewMealLog: Encodable, Sendable {
-    let recipe_id: UUID
-    let servings: Double
-    let eaten_on: String
+/// Everything the screens show from the server, fetched together and cached as one.
+nonisolated struct ServerSnapshot: Codable, Sendable {
+    let fetchedAt: Date
+    /// Local date of the fetch. `meals` only covers this day.
+    let day: String
+    let email: String?
+    let profile: ProfileRow
+    let stats: StatsRow?
+    let items: [ItemRow]
+    let inventory: [InventoryRow]
+    let quests: [QuestRow]
+    let dungeons: [DungeonRow]
+    let clearedDungeonIDs: [String]
+    let exams: [RankExamRow]
+    let recipes: [RecipeSummaryRow]
+    let ingredients: [IngredientRow]
+    let meals: [MealLogRow]
+    let lastSleep: SleepLogRow?
 }
+
+// MARK: - Writes
 
 nonisolated struct NewRating: Encodable, Sendable {
     let recipe_id: UUID
@@ -354,18 +379,28 @@ nonisolated struct NewRating: Encodable, Sendable {
     let cost: Int
 }
 
-nonisolated struct NewWorkout: Encodable, Sendable {
-    let id: UUID
-    let quest_id: UUID?
-    let workout_date: String
-    let is_exam: Bool
-}
-
 nonisolated struct NewWorkoutSet: Encodable, Sendable {
-    let workout_id: UUID
+    let id: UUID
     let exercise: String
     let weight_lb: Double
     let reps: Int
+    let performed_at: String
+}
+
+nonisolated struct SubmitWorkoutParams: Encodable, Sendable {
+    let p_id: UUID
+    let p_workout_date: String
+    let p_started_at: String
+    let p_is_exam: Bool
+    let p_sets: [NewWorkoutSet]
+    let p_quest_id: UUID?
+}
+
+nonisolated struct LogMealParams: Encodable, Sendable {
+    let p_id: UUID
+    let p_recipe_id: UUID
+    let p_servings: Double
+    let p_eaten_on: String
 }
 
 nonisolated struct NewIngredient: Encodable, Sendable {
@@ -379,5 +414,9 @@ nonisolated enum LocalDate {
     static func string(for date: Date = .now, calendar: Calendar = .current) -> String {
         let parts = calendar.dateComponents([.year, .month, .day], from: date)
         return String(format: "%04d-%02d-%02d", parts.year ?? 0, parts.month ?? 0, parts.day ?? 0)
+    }
+
+    static func yesterday(calendar: Calendar = .current) -> String {
+        string(for: calendar.date(byAdding: .day, value: -1, to: .now) ?? .now, calendar: calendar)
     }
 }

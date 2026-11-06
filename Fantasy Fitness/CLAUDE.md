@@ -15,7 +15,7 @@ A SwiftUI iOS app that gamifies weightlifting and exercise as a fantasy RPG. The
 ## Tech stack
 
 - Xcode project from the **App** template, SwiftUI, Swift.
-- Local storage: **SwiftData** (offline-first; gyms have bad signal). Keep a pending-uploads queue and sync when online. *(Not built yet; the app talks to Supabase directly for now.)*
+- Local storage: **SwiftData**, offline-first because gyms have bad signal. See "Offline-first data" below.
 - Backend: **Supabase** (Postgres, Auth, Storage, Realtime, Edge Functions) via `supabase-swift`.
   - Auth: Sign in with Apple (required if offering other third-party logins), email, Google.
   - Row-level security on every table. Users may insert workouts but may NOT write their own XP, stats, or inventory.
@@ -25,17 +25,41 @@ A SwiftUI iOS app that gamifies weightlifting and exercise as a fantasy RPG. The
 - HealthKit integration for cardio and sleep. Follow Apple's rules: no ad use of health data, clear privacy policy; prefer keeping raw health data on-device.
 - Game visuals (battles) later via SpriteKit embedded with SwiftUI `SpriteView`.
 
+## Architecture
+
+The target, for all new code:
+
+- MVVM with `@Observable`, but only screens with real logic get a view model.
+- Some view models cover a whole flow, e.g. workout, quest complete, rank exam.
+- A small `AppSession` holds the global state: profile, stats, Energy.
+- Game rules live in services, to make testing easier. Anything that affects rewards stays on the server (Postgres functions); app-side rules only mirror it for display.
+- Files are grouped by feature, one folder per tab.
+
+Where the code is today:
+
+- **View model:** `WorkoutSession` covers the workout flow, including quest complete. It's the model for new flows. Other screens use `GameStore` plus local `@State`.
+- **`GameStore`:** plays the `AppSession` role but is larger than intended. It also holds each tab's data, sign-in, connection-only actions and snapshot mapping.
+- **Rules:** XP, loot and quest rules are in Postgres. Display copies are `EnergyRules` and `Recovery` (`Models/PlayerProfile.swift`) and `GuildRank` (`Services/Rows.swift`).
+- **Folders:** `Views/` has one folder per tab; `Models/`, `Services/` and `Components/` are shared.
+
+Moving toward the target, without a big rewrite:
+
+- New flows (rank exam, sleep, cardio) get their own view model or service instead of adding to `GameStore`.
+- Shrink `GameStore` toward `AppSession` when already working in that area.
+- Move the display rules into a service when they next change.
+
 ## Backend (Supabase)
 
-Supabase is the backend. Everything the game needs is stored there; the app has no local database yet (the SwiftData offline queue is still to come).
+Supabase is the backend and the source of truth for anything that affects rewards. The app keeps a local copy and a pending-uploads queue (see "Offline-first data").
 
 **Files**
 - `supabase/migrations/20261022000000_initial_schema.sql`: tables, row-level security, column grants, triggers, server functions, storage buckets.
 - `supabase/migrations/20261022000100_catalog_data.sql`: items, dungeons, rank exams, quest templates, starter recipes. Safe to re-run.
 - `supabase/migrations/20261101000000_daily_energy.sql`: daily Energy top-up, 4 starting Energy, every dungeon costs 1. Safe to re-run.
+- `supabase/migrations/20261106000000_offline_sync.sql`: retry-safe `submit_workout` and `log_meal`. Safe to re-run.
 - `Fantasy Fitness/Config/Secrets.plist` (gitignored, never commit): `SUPABASE_URL` and `SUPABASE_ANON_KEY`. Copy `Secrets.example.plist` from the repo root to create it. Only the anon/publishable key goes in the app, never the service-role key.
-- `Fantasy Fitness/Services/`: `SupabaseConfig.swift` (reads the secrets, builds the client), `Rows.swift` (Codable row types and mapping to models), `GameStore.swift` (the single `@Observable` store all views read from via `@Environment(GameStore.self)`).
-- Without a valid `Secrets.plist` the app runs in **offline demo mode** on the sample data in `Models/` (a banner says so); previews use `GameStore.preview`. With keys, every screen shows real data from Supabase; sample data is never shown to a signed-in player.
+- `Fantasy Fitness/Services/`: `SupabaseConfig.swift` (reads the secrets, builds the client), `Rows.swift` (Codable row types and mapping to models), `LocalStore.swift` (SwiftData models and on-device storage), `SyncService.swift` (upload queue and refresh), `GameStore.swift` (the single `@Observable` store all views read from via `@Environment(GameStore.self)`).
+- Without a valid `Secrets.plist` the app runs in **offline demo mode** on the sample data in `Models/` (a banner says so); previews use `GameStore.preview`. Demo data lives in memory only. With keys, every screen shows real data from Supabase or its local copy; sample data is never shown to a signed-in player.
 
 **Schema**
 - Players: `profiles` (name, class, rank, xp, generated `level` / `level_start_xp` / `next_level_xp`, energy, bodyweight, macro targets with a 1200 kcal floor, `has_completed_onboarding`), `stats`, `inventory` (one row per owned item, `equipped`).
@@ -49,7 +73,7 @@ Supabase is the backend. Everything the game needs is stored there; the app has 
 - RLS on every table; players read only their own rows (catalogs and public recipes are shared).
 - Column-level grants: players can insert raw data and edit a few profile fields (name, class, bodyweight, macro targets). XP, level, rank, Energy, stats, inventory and quest progress are written only by `security definer` functions.
 - New sign-ups get a profile, stats and starter gear from a trigger on `auth.users`.
-- Client RPCs: `complete_onboarding`, `generate_quests(p_today)`, `complete_workout`, `equip_item` / `unequip_item`, `start_dungeon_run` / `finish_dungeon_run`, `unlocked_exams`, `create_recipe`. Logging meals, sleep and cardio recomputes quest progress via triggers.
+- Client RPCs: `complete_onboarding`, `generate_quests(p_today)`, `submit_workout`, `log_meal`, `equip_item` / `unequip_item`, `start_dungeon_run` / `finish_dungeon_run`, `unlocked_exams`, `create_recipe`. Logging meals, sleep and cardio recomputes quest progress via triggers. `complete_workout` remains for older builds; `submit_workout` calls it internally.
 - Stat formulas are placeholders (Strength from best Epley 1RM / bodyweight, Endurance from cardio minutes, Vitality from 7h+ nights) and only ever go up.
 - Known gap: dungeon battles are simulated on the device and the client reports victory. Move resolution server-side before anything competitive.
 
@@ -58,14 +82,46 @@ Supabase is the backend. Everything the game needs is stored there; the app has 
 - No quests until onboarding. `complete_onboarding` saves class, name and bodyweight, then posts the first quests based on the class: a daily (rotates through the class's workouts plus a rest day), a weekly (Forge Week; Rangers get Miles on the Map) and the first four-week story arc (The Iron Trial).
 
 **Daily loop**
-- The app calls `generate_quests(p_today)` on every load (sign-in, returning to the app, pull to refresh). Once per local day it tops Energy up to **4** (anything banked above 4 is kept, up to max 5) and posts any missing daily/weekly/story quest. Dates more than a day away from the server's date are rejected.
+- The app calls `generate_quests(p_today)` at the start of every sync, before uploading, so a workout logged offline counts toward today's quests. Once per local day it tops Energy up to **4** (anything banked above 4 is kept, up to max 5) and posts any missing daily/weekly/story quest. Dates more than a day away from the server's date are rejected.
 - Energy: each dungeon run costs **1**. Logging a workout, any cardio, or a 7+ hour night adds 1 (up to max). Sleep of 7+ hours also earns Well-Rested.
 - The app mirrors these numbers for display only in `EnergyRules` / `Recovery` (`Models/PlayerProfile.swift`); the server is the source of truth.
 
+**Offline-first data**
+
+The app reads from and writes to the device, and syncs with Supabase in the background. Three kinds of data, three rules:
+
+| Kind | Examples | Rule | Where |
+|---|---|---|---|
+| Created by the user | Workouts, sets, meal logs (later: exam attempts, sleep, cardio) | Write locally first, queue for upload, never lost offline | `LocalWorkout`, `LocalSet`, `LocalMeal` |
+| Owned by the server | Profile, stats, XP, inventory, quests, catalogs, recipes | Cache for instant display, refresh from the server, server always wins | `CachedSnapshot` |
+| Network only | Gear, dungeon runs, creating or rating recipes (later: leaderboards, forum, PvP, raids) | Needs a connection; offline shows "You're offline" | Direct calls in `GameStore` |
+
+- **Who talks to Supabase:** views never do. `SyncService` owns uploads and refreshes. `GameStore` owns auth and the network-only actions, and turns snapshots into the models views read.
+- **Snapshot cache:** server-owned data is one JSON `ServerSnapshot` per player, replaced whole by each refresh. It's not split into SwiftData tables because the app never queries or edits it, and an undecodable snapshot is just an empty cache. Dated data is rechecked when shown: quests past `ends_on` are hidden, meals count only on the fetch day, sleep only for last night.
+- **Launch:** a saved session plus a local snapshot opens the app immediately, even offline, then refreshes quietly. The first sign-in on a device still needs a connection.
+- **During a workout:** each set is saved to SwiftData the moment it's logged. The workout is created with its first set; `finishedAt == nil` means in progress. After a crash, or "Keep for later", the Guild Hall and Quest board offer "Resume workout" (one unfinished workout at a time).
+- **Finishing:** the workout joins the queue and the app waits up to 8 seconds for an upload. If the server answers, the summary shows the real payout. If not, it shows "Rewards pending". After a later upload, `ContentView` presents the loot reveal, held back while a workout or battle is on screen (`holdsRewardReveals`).
+- **Meals:** count toward today's rations immediately as a display-only copy. They stay on the device after upload until a refresh includes them, so the numbers don't dip.
+- **Sync triggers:** app open or foreground, connection back (`NWPathMonitor`), workout or meal saved, pull to refresh. Requests during a pass fold into one more pass.
+- **Each pass:** `generate_quests`, upload workouts, upload meals, fetch and save the snapshot. No connection stops the pass and keeps everything queued. A server refusal skips only that log, keeps it, shows the reason and retries next sync, so one bad log can't block the rest.
+- **Logout:** tries to upload first. Anything left stays on the device, tied to that player, and uploads at their next login. Only their cached snapshot is deleted.
+
+Rules that prevent sync bugs:
+- **Ids come from the phone.** Workouts, sets and meals get a UUID on the device. `submit_workout` is one transaction; a repeat of the same id pays nothing and returns the stored result, so flaky Wi-Fi can't double XP.
+- **Logs are add-only.** Sync never edits a workout or meal, so devices can't overwrite each other.
+- **Never calculate rewards locally.** The app sends raw sets; the server returns XP (`xp_gained`, including quests the workout completed) and loot (`item_ids`). Demo mode's estimate is the only exception, because it has no server.
+- **Offline logs have a date limit:** the server accepts dates from 30 days ago to tomorrow.
+- **Client limits must match server limits**, or a log is refused forever (exercise name up to 80 characters, weight up to 2,000 lb).
+
+Other storage:
+- Login session: `supabase-swift` stores it. Keep any other secrets in the Keychain, not SwiftData or `UserDefaults`.
+- Small preferences (units, last tab): `@AppStorage`.
+- HealthKit: read on the device and upload only the summaries quests need (e.g. "slept 7.5 hours"), not raw records.
+
 **Loading and error states**
-- `GameStore.loadState` is `idle / loading / loaded / failed`. Until the first load succeeds, the tab shell shows a full-screen board: "Opening the guild hall…" while loading, or "Can't reach the guild" with Try again / Log out on failure (`Components/BoardStatus.swift`).
-- After data has loaded, a failed refresh keeps the last good data on screen and shows a "Couldn't refresh" banner with Retry at the top of each root board. Pull to refresh works on every root board. Sync status also shows in Settings.
-- Sign-in only completes once data loads; if it can't, the login sheet shows the reason. Individual writes (equip, log meal, rate, dungeon run) disable their button while saving and show an alert if they fail.
+- `GameStore.loadState` is `idle / loading / loaded / failed`. With no local copy yet, the tab shell shows a full-screen board: "Opening the guild hall…" while loading, or "Can't reach the guild" with Try again / Log out on failure (`Components/BoardStatus.swift`).
+- With data on screen, root boards show a banner when needed: offline (with what's waiting to upload), "Couldn't refresh" after a server error, or a refused upload. Each has Retry. Pull to refresh works on every root board. Settings shows sync status, the queue and the last sync.
+- Sign-in only completes once data loads; if it can't, the login sheet shows the reason. Network-only actions disable their button while saving and show an alert if they fail.
 
 **Setup for a new project**
 1. Create a project at supabase.com.
@@ -112,14 +168,14 @@ Notes:
 - **Loot reveal** is shared by Quests and Dungeons: build once as a reusable view/modal.
 - **Workout session** and **Battle** are presented with `.fullScreenCover` (tab bar hidden).
 - **Rank exams** appear as a card on the Quest board and launch Workout session in "exam mode."
-- Quest board "Begin quest" button opens Workout session (log weight/reps per set, rest timer) → Quest complete (XP, stat gains) → Loot reveal. Label varies by tab: Daily "Begin quest"; Weekly and Story "Log a workout" (their progress shows on the scroll). The Guild Hall also has a "Log a workout" button.
+- Quest board "Begin quest" button opens Workout session (log weight/reps per set, rest timer) → Quest complete (XP, or rewards pending offline) → Loot reveal when the server granted loot. Label varies by tab: Daily "Begin quest"; Weekly and Story "Log a workout" (their progress shows on the scroll). The Guild Hall also has a "Log a workout" button.
 
 **Workout session** (`Views/Workout/`)
 - `WorkoutSession` (state) + `WorkoutSessionView` (UI), presented with `.workoutSessionCover($activeWorkout)`. A daily quest opens with its lifts as the plan (exercise, sets, min reps / weight from `quest_objectives`); other entry points open a free session. "Add" adds any exercise.
 - The big title is the current exercise and slides to the new name whenever it changes: tapping an exercise chip, adding one, or finishing the last required set of a lift (auto-advances to the next unfinished lift).
 - Log set = weight × reps (steppers, prefilled from the last set or the quest minimum). Sets below the quest minimum are still logged but marked as not counting.
 - Rest timer (`RestTimerCard` / `RestTimer`) starts automatically after every logged set: ring countdown, −15 s / pause / +30 s / skip, preset lengths 1:00–3:00 (default 1:30), haptic when it ends. It stores an end time, so it stays correct in the background.
-- Nothing is sent until **Finish workout**: inserts `workouts` + `workout_sets`, then `complete_workout` returns XP; the store reloads so quest progress, stats and Energy update. Closing with unsaved sets asks to discard.
+- Each set is saved on the device as it's logged. **Finish workout** queues it for `submit_workout`; the refresh updates quest progress, stats and Energy. Closing with sets asks whether to keep the workout for later or discard it. See "Offline-first data" for the pending and reward flow.
 
 ## Visual style (Quest Board reference)
 

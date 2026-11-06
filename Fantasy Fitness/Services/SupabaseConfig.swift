@@ -36,6 +36,13 @@ enum Backend {
     /// otherwise Supabase falls back to the Site URL (localhost by default).
     static let authRedirectURL = URL(string: "fantasyfitness://login-callback")!
 
+    /// Gyms have weak signal: fail a stuck request soon so its data waits in the queue.
+    private static let session: URLSession = {
+        let configuration = URLSessionConfiguration.default
+        configuration.timeoutIntervalForRequest = 20
+        return URLSession(configuration: configuration)
+    }()
+
     /// Shared client, or nil in offline demo mode.
     static let client: SupabaseClient? = SupabaseConfig.load().map {
         SupabaseClient(
@@ -46,7 +53,7 @@ enum Backend {
                 // Opt in to the SDK's upcoming default. We never rely on the initial
                 // auth event; `GameStore.resumeSession` validates the session itself.
                 emitLocalSessionAsInitialSession: true
-            ))
+            ), global: .init(session: session))
         )
     }
 }

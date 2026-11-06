@@ -17,16 +17,17 @@ struct QuestBoardView: View {
             BoardSign(title: "Quest Board")
             WoodSegmentedPicker(options: QuestKind.allCases, selection: $selectedKind, title: \.title)
             if let quest = store.quests[selectedKind] {
-                QuestScroll(quest: quest) {
+                QuestScroll(quest: quest, actionLabel: store.workoutDraft == nil ? quest.kind.actionLabel : "Resume workout") {
                     // Daily quests open the logger with their lifts; weekly / story progress
                     // comes from any logged workout, so those open a free session.
-                    activeWorkout = ActiveWorkout(quest: quest.kind == .daily ? quest : nil)
+                    activeWorkout = store.openWorkout(quest: quest.kind == .daily ? quest : nil)
                 }
                 .padding(.top, 4)
             } else {
                 ParchmentCard {
                     NoteHeading(title: "No \(selectedKind.title.lowercased()) quest posted",
-                                subtitle: "New quests are posted each day and week.")
+                                subtitle: store.sync.isOffline ? "New quests arrive when you're back online."
+                                    : "New quests are posted each day and week.")
                 }
             }
             PinnedNotesGrid()
@@ -40,6 +41,7 @@ struct QuestBoardView: View {
 
 private struct QuestScroll: View {
     let quest: Quest
+    let actionLabel: String
     let action: () -> Void
 
     var body: some View {
@@ -86,7 +88,7 @@ private struct QuestScroll: View {
             }
             .padding(.top, 10)
 
-            Button(quest.kind.actionLabel, action: action)
+            Button(actionLabel, action: action)
                 .buttonStyle(.chunky(.wax, fontSize: 21))
                 .padding(.top, 22)
         }

@@ -94,6 +94,23 @@ struct LootRevealView: View {
     }
 }
 
+extension View {
+    /// Marks a full-screen flow, which SwiftUI can't present a reward reveal on top of.
+    func holdsRewardReveals() -> some View {
+        modifier(HoldsRewardReveals())
+    }
+}
+
+private struct HoldsRewardReveals: ViewModifier {
+    @Environment(GameStore.self) private var store
+
+    func body(content: Content) -> some View {
+        content
+            .onAppear { store.isInFullScreenFlow = true }
+            .onDisappear { store.isInFullScreenFlow = false }
+    }
+}
+
 #Preview {
     LootRevealView(loot: .sampleDungeon, onCollect: {})
 }

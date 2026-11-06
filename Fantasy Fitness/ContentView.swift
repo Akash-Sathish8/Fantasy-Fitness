@@ -35,9 +35,17 @@ struct ContentView: View {
             }
         }
         .task { if !store.hasData { await store.load() } }
-        // Coming back to the app (often on a new day) refreshes Energy and quests.
+        // Coming back to the app (often on a new day) uploads the queue and refreshes
+        // Energy and quests.
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { Task { await store.load() } }
+        }
+        // A workout that uploaded after the player moved on shows its rewards here.
+        .fullScreenCover(item: Binding(
+            get: { store.rewardReveal },
+            set: { if $0 == nil, let id = store.rewardReveal?.id { store.sync.dismissReward(id) } }
+        )) { reveal in
+            LootRevealView(loot: reveal.loot) { store.sync.dismissReward(reveal.id) }
         }
         // Dark scheme keeps the glass tab bar and status bar dark over the wood board.
         .preferredColorScheme(.dark)

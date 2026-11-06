@@ -10,7 +10,6 @@ struct RecipeDetailView: View {
 
     @Environment(GameStore.self) private var store
     @State private var isLogged = false
-    @State private var isLogging = false
     @State private var showingRating = false
 
     /// The store's copy, so new ratings show after a reload.
@@ -78,18 +77,14 @@ struct RecipeDetailView: View {
                 .padding(.top, 8)
 
                 Button {
-                    Task {
-                        isLogging = true
-                        let logged = await store.logMeal(latest)
-                        isLogging = false
-                        withAnimation(.snappy) { isLogged = logged }
-                    }
+                    let logged = store.logMeal(latest)
+                    withAnimation(.snappy) { isLogged = logged }
                 } label: {
                     Label(isLogged ? "Logged to today's rations" : "Log meal",
                           systemImage: isLogged ? "checkmark" : "fork.knife")
                 }
                 .buttonStyle(.chunky(isLogged ? .emerald : .wax))
-                .disabled(isLogged || isLogging)
+                .disabled(isLogged)
                 .padding(.top, 22)
 
                 Button("Rate recipe") { showingRating = true }

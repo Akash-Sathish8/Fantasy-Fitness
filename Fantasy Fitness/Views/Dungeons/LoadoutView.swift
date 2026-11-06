@@ -106,6 +106,7 @@ struct LoadoutView: View {
                 activeRun = nil
                 dismiss()
             }
+            .holdsRewardReveals()
         }
     }
 }

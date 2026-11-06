@@ -2,8 +2,10 @@
 //  GameStore.swift
 //  Fantasy Fitness
 //
-//  The app's single source of player data. Reads come from Supabase; writes send
-//  raw data (meals, ratings, sets) or call server functions that decide rewards.
+//  The app's single source of player data. Views read it from here; it shows the
+//  local cache straight away and SyncService keeps that cache in step with Supabase.
+//  Workouts and meals are saved on the device first. Actions the server has to decide
+//  on the spot (gear, dungeons, recipes) need a connection and call it directly.
 //  Without Config/Secrets.plist it runs in offline demo mode on sample data.
 //
 
@@ -22,8 +24,6 @@ final class GameStore {
 
     private(set) var isSignedIn = false
     private(set) var loadState: LoadState = .idle
-    /// Set when a refresh fails while older data is still on screen.
-    private(set) var refreshError: String?
     private(set) var profile: PlayerProfile?
     /// Hours slept last night, if the player has logged it.
     private(set) var lastNightSleepHours: Double?
@@ -34,27 +34,51 @@ final class GameStore {
     private(set) var recipes: [Recipe] = []
     private(set) var rations = DailyRations(eaten: .zero, target: .zero)
     private(set) var unlockedExam: RankExam?
+    /// The workout left unfinished, shown as "Resume workout".
+    private(set) var workoutDraft: WorkoutDraft?
+    /// Workout session or battle on screen; reward reveals wait until it closes.
+    var isInFullScreenFlow = false
     /// Last error to show the player; views clear it after presenting.
     var errorMessage: String?
 
     @ObservationIgnored let client: SupabaseClient?
+    @ObservationIgnored let sync: SyncService
+    @ObservationIgnored private let local: LocalStore
     @ObservationIgnored private var userID: UUID?
     @ObservationIgnored private var catalog: [String: Item] = [:]
+    @ObservationIgnored private var latestSnapshot: ServerSnapshot?
 
     init(client: SupabaseClient? = Backend.client) {
         self.client = client
+        local = LocalStore(inMemory: client == nil)
+        sync = SyncService(client: client, local: local)
+        sync.onSnapshot = { [weak self] in self?.apply($0) }
     }
 
     var isDemo: Bool { client == nil }
     var hasData: Bool { profile != nil }
     var player: PlayerProfile { profile ?? .empty }
     var equippedIDs: Set<String> { Set(player.equipped.map(\.id)) }
+    var refreshError: String? { sync.refreshError }
+
+    /// The next uploaded workout to celebrate, once nothing full screen is in the way.
+    var rewardReveal: RewardReveal? {
+        guard !isInFullScreenFlow, let reward = sync.rewards.first else { return nil }
+        return RewardReveal(id: reward.id, loot: lootDrop(for: reward.result))
+    }
 
     // MARK: - Auth
 
-    /// Restores a saved session so returning players skip the login sheet.
+    /// Restores a saved session so returning players skip the login sheet. With a local
+    /// copy of their data they're in immediately, even offline, and it refreshes behind them.
     func resumeSession() async -> Bool {
-        guard let client, client.auth.currentSession != nil else { return false }
+        guard let client, let session = client.auth.currentSession else { return false }
+        if let cached = local.snapshot(for: session.user.id) {
+            startUsing(session.user.id)
+            apply(cached)
+            sync.requestSync()
+            return true
+        }
         do {
             _ = try await client.auth.session
             return await loadForSignIn()
@@ -91,7 +115,7 @@ final class GameStore {
             }
             return await loadForSignIn()
         } catch {
-            errorMessage = Self.message(for: error)
+            errorMessage = ServerError.message(for: error)
             return false
         }
     }
@@ -103,17 +127,22 @@ final class GameStore {
             try await client.auth.session(from: url)
             return await loadForSignIn()
         } catch {
-            errorMessage = "That link didn't work (\(Self.message(for: error))). Try logging in with your email and password."
+            errorMessage = "That link didn't work (\(ServerError.message(for: error))). Try logging in with your email and password."
             return false
         }
     }
 
+    /// Uploads what it can first. Anything left stays queued for this player's next login;
+    /// only their cached copy of server data is removed.
     func signOut() async {
+        if sync.pendingCount > 0 { await sync.sync(waitingUpTo: .seconds(5)) }
         try? await client?.auth.signOut()
+        if let userID { try? local.deleteSnapshot(for: userID) }
+        sync.setUser(nil)
         isSignedIn = false
         loadState = .idle
-        refreshError = nil
         userID = nil
+        latestSnapshot = nil
         accountEmail = nil
         lastNightSleepHours = nil
         profile = nil
@@ -122,6 +151,7 @@ final class GameStore {
         dungeons = []
         recipes = []
         unlockedExam = nil
+        workoutDraft = nil
     }
 
     private func authenticate(_ action: (SupabaseClient) async throws -> Session?) async -> Bool {
@@ -133,7 +163,7 @@ final class GameStore {
             _ = try await action(client)
             return await loadForSignIn()
         } catch {
-            errorMessage = Self.message(for: error)
+            errorMessage = ServerError.message(for: error)
             return false
         }
     }
@@ -143,6 +173,8 @@ final class GameStore {
     /// Loads after signing in. If the data can't be fetched, sign-in fails with a message
     /// rather than dropping the player into empty screens.
     private func loadForSignIn() async -> Bool {
+        guard let client, let session = try? await client.auth.session else { return false }
+        startUsing(session.user.id)
         await load()
         if case .failed(let message) = loadState {
             errorMessage = "Signed in, but your guild data couldn't load: \(message)"
@@ -151,98 +183,69 @@ final class GameStore {
         return isSignedIn
     }
 
-    /// Fetches everything the screens show. Safe to call repeatedly (pull to refresh,
-    /// returning to the app, after every write).
+    private func startUsing(_ user: UUID) {
+        userID = user
+        sync.setUser(user)
+        workoutDraft = local.draft(for: user)
+    }
+
+    /// Uploads anything queued and refreshes from the server. Safe to call repeatedly
+    /// (pull to refresh, returning to the app, after every write).
     func load() async {
-        guard let client else {
+        guard client != nil else {
             loadDemo()
             return
         }
         if !hasData { loadState = .loading }
-        do {
-            let user = try await client.auth.session.user
-            userID = user.id
-            accountEmail = user.email
-            let today = LocalDate.string()
-            let yesterday = LocalDate.string(for: Calendar.current.date(byAdding: .day, value: -1, to: .now) ?? .now)
-
-            // Starts the day on the server: tops Energy up to 4 and posts today's daily,
-            // this week's weekly and an active story quest (once onboarding is done).
-            try await client.rpc("generate_quests", params: ["p_today": today]).execute()
-            let profileRow = try await fetchProfile(client, user: user.id)
-
-            async let statsRows: [StatsRow] = client.from("stats").select().execute().value
-            async let itemRows: [ItemRow] = client.from("items").select().execute().value
-            async let inventoryRows: [InventoryRow] = client.from("inventory").select("item_id, equipped").execute().value
-            async let questRows: [QuestRow] = client.from("quests")
-                .select("id, kind, arc, title, rewards, starts_on, quest_objectives(id, position, name, detail, target, progress, is_complete, metric, exercise, min_reps, min_weight_lb)")
-                .lte("starts_on", value: today)
-                .gte("ends_on", value: today)
-                .order("starts_on", ascending: false)
-                .execute().value
-            async let dungeonRows: [DungeonRow] = client.from("dungeons").select().order("sort_order").execute().value
-            async let clearedRows: [DungeonRunRow] = client.from("dungeon_runs").select("dungeon_id")
-                .eq("victory", value: true).execute().value
-            async let examRows: [RankExamRow] = client.rpc("unlocked_exams").execute().value
-            async let recipeRows: [RecipeSummaryRow] = client.from("recipe_summaries").select()
-                .order("created_at").execute().value
-            async let ingredientRows: [IngredientRow] = client.from("recipe_ingredients").select().execute().value
-            async let mealRows: [MealLogRow] = client.from("meal_logs").select("calories, protein_g, carbs_g, fat_g")
-                .eq("eaten_on", value: today).execute().value
-            async let sleepRows: [SleepLogRow] = client.from("sleep_logs").select("night_of, hours")
-                .gte("night_of", value: yesterday).order("night_of", ascending: false).limit(1).execute().value
-
-            catalog = Dictionary(try await itemRows.compactMap(\.item).map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
-            let owned = try await inventoryRows
-            inventory = owned.compactMap { catalog[$0.itemID] }
-            let equipped = owned.filter(\.equipped).compactMap { catalog[$0.itemID] }
-            profile = profileRow.profile(stats: try await statsRows.first, equipped: equipped)
-
-            var byKind: [QuestKind: Quest] = [:]
-            for quest in try await questRows.compactMap(\.quest) where byKind[quest.kind] == nil {
-                byKind[quest.kind] = quest
-            }
-            quests = byKind
-
-            let cleared = Set(try await clearedRows.map(\.dungeonID))
-            dungeons = try await dungeonRows.map { $0.dungeon(playerRank: profileRow.rank, cleared: cleared) }
-            unlockedExam = try await examRows.first?.exam(bodyweight: profileRow.bodyweightLb)
-
-            let ingredients = Dictionary(grouping: try await ingredientRows, by: \.recipeID)
-            recipes = try await recipeRows.map { row in
-                row.recipe(
-                    ingredients: (ingredients[row.id] ?? []).sorted { $0.position < $1.position }
-                        .map { Ingredient(name: $0.name, amount: $0.amount) },
-                    currentUser: user.id
-                )
-            }
-
-            let meals = try await mealRows
-            rations = DailyRations(
-                eaten: Macros(calories: meals.map(\.calories).reduce(0, +),
-                              protein: meals.map(\.proteinG).reduce(0, +),
-                              carbs: meals.map(\.carbsG).reduce(0, +),
-                              fat: meals.map(\.fatG).reduce(0, +)),
-                target: profileRow.targets
-            )
-            lastNightSleepHours = try await sleepRows.first?.hours
-            isSignedIn = true
-            loadState = .loaded
-            refreshError = nil
-        } catch is CancellationError {
-            // A newer refresh replaced this one; keep whatever is on screen.
-        } catch {
-            let message = Self.message(for: error)
-            if hasData {
-                refreshError = message
-            } else {
-                loadState = .failed(message)
-            }
+        await sync.sync()
+        if !hasData {
+            loadState = .failed(sync.refreshError ?? "You're offline. Connect once to load your guild.")
+        } else if sync.isOffline, let latestSnapshot {
+            apply(latestSnapshot)  // the date may have moved on since this was fetched
         }
     }
 
-    private func fetchProfile(_ client: SupabaseClient, user: UUID) async throws -> ProfileRow {
-        try await client.from("profiles").select().eq("id", value: user).single().execute().value
+    /// Turns a snapshot into what the screens show, leaving out anything past its dates.
+    private func apply(_ snapshot: ServerSnapshot) {
+        latestSnapshot = snapshot
+        let today = LocalDate.string()
+        accountEmail = snapshot.email
+
+        catalog = Dictionary(snapshot.items.compactMap(\.item).map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        inventory = snapshot.inventory.compactMap { catalog[$0.itemID] }
+        let equipped = snapshot.inventory.filter(\.equipped).compactMap { catalog[$0.itemID] }
+        profile = snapshot.profile.profile(stats: snapshot.stats, equipped: equipped)
+
+        var byKind: [QuestKind: Quest] = [:]
+        for row in snapshot.quests where row.startsOn <= today && row.endsOn >= today {
+            if let quest = row.quest, byKind[quest.kind] == nil { byKind[quest.kind] = quest }
+        }
+        quests = byKind
+
+        let cleared = Set(snapshot.clearedDungeonIDs)
+        dungeons = snapshot.dungeons.map { $0.dungeon(playerRank: snapshot.profile.rank, cleared: cleared) }
+        unlockedExam = snapshot.exams.first?.exam(bodyweight: snapshot.profile.bodyweightLb)
+
+        let ingredients = Dictionary(grouping: snapshot.ingredients, by: \.recipeID)
+        recipes = snapshot.recipes.map { row in
+            row.recipe(
+                ingredients: (ingredients[row.id] ?? []).sorted { $0.position < $1.position }
+                    .map { Ingredient(name: $0.name, amount: $0.amount) },
+                currentUser: userID
+            )
+        }
+
+        let served = snapshot.day == today ? snapshot.meals : []
+        let notYetServed = userID.map { local.meals(for: $0) }?.filter { $0.eatenOn == today } ?? []
+        rations = DailyRations(
+            eaten: served.reduce(Macros.zero) {
+                $0 + Macros(calories: $1.calories, protein: $1.proteinG, carbs: $1.carbsG, fat: $1.fatG)
+            } + notYetServed.reduce(Macros.zero) { $0 + $1.macros },
+            target: snapshot.profile.targets
+        )
+        lastNightSleepHours = snapshot.lastSleep.flatMap { $0.nightOf >= LocalDate.yesterday() ? $0.hours : nil }
+        isSignedIn = true
+        loadState = .loaded
     }
 
     /// Demo-mode store filled with sample data, for SwiftUI previews.
@@ -263,6 +266,8 @@ final class GameStore {
         lastNightSleepHours = 7.5
         isSignedIn = true
         loadState = .loaded
+        // Demo workouts go through the same local store, which only needs some id.
+        userID = userID ?? UUID()
     }
 
     // MARK: - Onboarding
@@ -313,7 +318,7 @@ final class GameStore {
             await load()  // shows the Energy just spent
             return runID
         } catch {
-            errorMessage = Self.message(for: error)
+            errorMessage = ServerError.message(for: error)
             return nil
         }
     }
@@ -332,23 +337,30 @@ final class GameStore {
                             xp: result.xp,
                             items: result.itemIDs.compactMap { catalog[$0] })
         } catch {
-            errorMessage = Self.message(for: error)
+            errorMessage = ServerError.message(for: error)
             return nil
         }
     }
 
     // MARK: - Tavern
 
-    func logMeal(_ recipe: Recipe, servings: Double = 1) async -> Bool {
-        guard let client, let recipeID = UUID(uuidString: recipe.id) else {
+    /// Saves the meal on the device and counts it toward today's rations right away.
+    func logMeal(_ recipe: Recipe, servings: Double = 1) -> Bool {
+        guard client != nil, let userID, let recipeID = UUID(uuidString: recipe.id) else {
             rations = DailyRations(eaten: rations.eaten + recipe.macros, target: rations.target)
             return true
         }
-        return await perform {
-            try await client.from("meal_logs")
-                .insert(NewMealLog(recipe_id: recipeID, servings: servings, eaten_on: LocalDate.string()))
-                .execute()
+        do {
+            try local.addMeal(LocalMeal(userID: userID, recipeID: recipeID, servings: servings,
+                                        eatenOn: LocalDate.string(), macros: recipe.macros))
+        } catch {
+            errorMessage = "Couldn't save that on this device. \(error.localizedDescription)"
+            return false
         }
+        sync.queueChanged()
+        if let latestSnapshot { apply(latestSnapshot) }
+        sync.requestSync()
+        return true
     }
 
     func rate(_ recipe: Recipe, taste: Int, ease: Int, cost: Int) async -> Bool {
@@ -382,31 +394,58 @@ final class GameStore {
 
     // MARK: - Workouts
 
-    /// Uploads a finished workout's sets, then asks the server to award XP, stats and
-    /// quest progress. For the upcoming Workout session screen.
-    /// Returns the server's payout, or nil (with `errorMessage` set) if it couldn't be saved.
-    func submitWorkout(sets: [LoggedSet], questID: String? = nil, isExam: Bool = false) async -> WorkoutResult? {
-        guard let client else {
-            return WorkoutResult(xpGained: min(10 * sets.count, 300), sets: sets.count)
+    /// Opens a Workout session, picking up an unfinished one instead if there is one.
+    func openWorkout(quest: Quest?) -> ActiveWorkout {
+        guard let workoutDraft else { return ActiveWorkout(quest: quest) }
+        let saved = quests.values.first { $0.id == workoutDraft.questID }
+        return ActiveWorkout(quest: saved, draft: workoutDraft)
+    }
+
+    /// Saves a set to the device the moment it's logged.
+    func saveSet(_ set: LoggedSet, in session: WorkoutSession) {
+        guard let userID else { return }
+        saveLocally { try local.add(set, to: session, user: userID) }
+        workoutDraft = local.draft(for: userID)
+    }
+
+    func removeSet(_ set: LoggedSet, in session: WorkoutSession) {
+        saveLocally { try local.remove(set, from: session) }
+        workoutDraft = userID.flatMap { local.draft(for: $0) }
+    }
+
+    func discardWorkout(_ session: WorkoutSession) {
+        saveLocally { try local.deleteWorkout(id: session.id) }
+        workoutDraft = nil
+    }
+
+    /// Queues a finished workout and tries to upload it. The server's payout comes back
+    /// if it gets through quickly; otherwise `.pending`, and it uploads on a later sync.
+    func finishWorkout(_ session: WorkoutSession) async -> WorkoutOutcome {
+        guard client != nil else {
+            discardWorkout(session)
+            return .paid(WorkoutResult(xpGained: min(10 * session.sets.count, 300), sets: session.sets.count, itemIDs: []))
         }
-        let workoutID = UUID()
+        saveLocally { try local.finishWorkout(id: session.id) }
+        workoutDraft = nil
+        sync.queueChanged()
+        await sync.sync(waitingUpTo: .seconds(8))
+        return sync.takeReward(for: session.id).map(WorkoutOutcome.paid) ?? .pending
+    }
+
+    /// The server's rewards, ready for the loot reveal.
+    func lootDrop(for result: WorkoutResult) -> LootDrop {
+        let items = result.itemIDs.compactMap { catalog[$0] }
+        return LootDrop(title: items.isEmpty ? "Workout saved" : "Quest complete",
+                        chestRarity: items.map(\.rarity).max() ?? .common,
+                        xp: result.xpGained,
+                        items: items)
+    }
+
+    private func saveLocally(_ write: () throws -> Void) {
         do {
-            try await client.from("workouts").insert(NewWorkout(
-                id: workoutID,
-                quest_id: questID.flatMap(UUID.init(uuidString:)),
-                workout_date: LocalDate.string(),
-                is_exam: isExam
-            ), returning: .minimal).execute()
-            try await client.from("workout_sets").insert(sets.map {
-                NewWorkoutSet(workout_id: workoutID, exercise: $0.exercise, weight_lb: $0.weightLb, reps: $0.reps)
-            }, returning: .minimal).execute()
-            let result: WorkoutResult = try await client.rpc("complete_workout", params: ["p_workout_id": workoutID])
-                .execute().value
-            await load()
-            return result
+            try write()
         } catch {
-            errorMessage = Self.message(for: error)
-            return nil
+            errorMessage = "Couldn't save that on this device. \(error.localizedDescription)"
         }
     }
 
@@ -419,16 +458,11 @@ final class GameStore {
             await load()
             return true
         } catch {
-            errorMessage = Self.message(for: error)
+            errorMessage = ServerError.message(for: error)
             return false
         }
     }
 
-    private static func message(for error: Error) -> String {
-        if let error = error as? PostgrestError { return error.message }
-        if let error = error as? AuthError { return error.message }
-        return error.localizedDescription
-    }
 }
 
 /// One set as entered in the Workout session.
@@ -437,17 +471,48 @@ struct LoggedSet: Identifiable, Hashable {
     let exercise: String
     let weightLb: Double
     let reps: Int
+    var performedAt = Date.now
 }
 
-/// What `complete_workout` paid out.
+extension LoggedSet {
+    /// "1 set", "4 sets".
+    static func countLabel(_ count: Int) -> String {
+        "\(count) \(count == 1 ? "set" : "sets")"
+    }
+}
+
+/// A workout saved on the device that was left unfinished.
+struct WorkoutDraft {
+    let id: UUID
+    let questID: String?
+    let workoutDate: String
+    let startedAt: Date
+    let sets: [LoggedSet]
+}
+
+/// What `submit_workout` paid out. XP includes any quest the workout completed.
 nonisolated struct WorkoutResult: Decodable, Sendable {
     let xpGained: Int
     let sets: Int
+    let itemIDs: [String]
 
     enum CodingKeys: String, CodingKey {
         case sets
         case xpGained = "xp_gained"
+        case itemIDs = "item_ids"
     }
+}
+
+enum WorkoutOutcome {
+    case paid(WorkoutResult)
+    /// Saved on the device; the server hasn't seen it yet, so there are no rewards to show.
+    case pending
+}
+
+/// A reward reveal for a workout that uploaded after the player moved on.
+struct RewardReveal: Identifiable {
+    let id: UUID
+    let loot: LootDrop
 }
 
 // MARK: - RPC parameters

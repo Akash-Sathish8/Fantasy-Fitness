@@ -48,9 +48,10 @@ struct GuildHallView: View {
             }
 
             Button {
-                activeWorkout = ActiveWorkout(quest: store.quests[.daily].flatMap { $0.liftPlan.isEmpty ? nil : $0 })
+                activeWorkout = store.openWorkout(quest: store.quests[.daily].flatMap { $0.liftPlan.isEmpty ? nil : $0 })
             } label: {
-                Label("Log a workout", systemImage: "dumbbell.fill")
+                Label(store.workoutDraft.map { "Resume workout · \(LoggedSet.countLabel($0.sets.count))" } ?? "Log a workout",
+                      systemImage: "dumbbell.fill")
             }
             .buttonStyle(.chunky(.wax))
 

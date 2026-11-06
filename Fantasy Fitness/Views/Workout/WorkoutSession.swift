@@ -3,8 +3,8 @@
 //  Fantasy Fitness
 //
 //  State for one Workout session: the planned lifts, the sets logged so far, which
-//  exercise is current, and the rest timer that starts after each set. Nothing is
-//  sent to the server until the player finishes the workout.
+//  exercise is current, and the rest timer that starts after each set. The view saves
+//  each set to the device as it's logged; finishing queues the workout for upload.
 //
 
 import Foundation
@@ -12,6 +12,9 @@ import Observation
 
 @Observable
 final class WorkoutSession {
+    /// The server refuses longer names, which would leave the workout stuck in the queue.
+    private static let maxExerciseNameLength = 80
+
     /// One exercise in the session, planned by a quest or added by the player.
     struct Exercise: Identifiable, Hashable {
         var id: String { name.lowercased() }
@@ -19,18 +22,34 @@ final class WorkoutSession {
         var target: LiftTarget?
     }
 
+    let id: UUID
     let questID: String?
+    let startedAt: Date
+    /// The day this workout counts for: the day it started, whenever it uploads.
+    let workoutDate: String
     private(set) var exercises: [Exercise]
-    private(set) var sets: [LoggedSet] = []
-    var currentName: String
+    private(set) var sets: [LoggedSet]
+    var currentName = ""
     let restTimer = RestTimer()
 
-    init(quest: Quest?) {
-        questID = quest?.id
-        let planned = quest?.liftPlan.map { Exercise(name: $0.exercise, target: $0) } ?? []
+    /// Starts fresh for `quest`, or picks up `draft` where it was left.
+    init(quest: Quest?, draft: WorkoutDraft? = nil) {
+        id = draft?.id ?? UUID()
+        questID = draft?.questID ?? quest?.id
+        startedAt = draft?.startedAt ?? .now
+        workoutDate = draft?.workoutDate ?? LocalDate.string()
+        let saved = draft?.sets ?? []
+        sets = saved
+
+        var planned = quest?.liftPlan.map { Exercise(name: $0.exercise, target: $0) } ?? []
+        for set in saved where !planned.contains(where: { $0.id == set.exercise.lowercased() }) {
+            planned.append(Exercise(name: set.exercise, target: nil))
+        }
         exercises = planned
+
         // Start on the first lift the quest still needs.
-        currentName = planned.first { !Self.isDone($0, extraSets: 0) }?.name ?? planned.first?.name ?? ""
+        currentName = exercises.first { $0.target != nil && !isDone($0) }?.name
+            ?? sets.last?.exercise ?? exercises.first?.name ?? ""
     }
 
     var current: Exercise? { exercises.first { $0.name == currentName } }
@@ -53,11 +72,6 @@ final class WorkoutSession {
         return countingSets(for: exercise) >= target.sets
     }
 
-    private static func isDone(_ exercise: Exercise, extraSets: Int) -> Bool {
-        guard let target = exercise.target else { return false }
-        return target.setsDone + extraSets >= target.sets
-    }
-
     /// Weight to prefill: the last set of this exercise, else the quest's minimum.
     func suggestedWeight(for name: String) -> Double {
         sets(for: name).last?.weightLb ?? current?.target?.minWeightLb ?? 0
@@ -75,7 +89,7 @@ final class WorkoutSession {
 
     /// Adds an exercise the quest didn't plan (or switches to it if it's already listed).
     func addExercise(named rawName: String) {
-        let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let name = String(rawName.trimmingCharacters(in: .whitespacesAndNewlines).prefix(Self.maxExerciseNameLength))
         guard !name.isEmpty else { return }
         if let existing = exercises.first(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame }) {
             currentName = existing.name
@@ -87,13 +101,16 @@ final class WorkoutSession {
 
     /// Logs a set for the current exercise and starts the rest timer. When the quest's
     /// sets for this lift are done, moves on to the next unfinished lift.
-    func logSet(weightLb: Double, reps: Int) {
-        guard let exercise = current, reps > 0 else { return }
-        sets.append(LoggedSet(exercise: exercise.name, weightLb: max(weightLb, 0), reps: reps))
+    /// Returns the new set for the caller to save.
+    func logSet(weightLb: Double, reps: Int) -> LoggedSet? {
+        guard let exercise = current, reps > 0 else { return nil }
+        let set = LoggedSet(exercise: exercise.name, weightLb: max(weightLb, 0), reps: reps)
+        sets.append(set)
         restTimer.start()
         if isDone(exercise), let next = exercises.first(where: { !isDone($0) && $0.target != nil }) {
             currentName = next.name
         }
+        return set
     }
 
     func removeSet(_ set: LoggedSet) {

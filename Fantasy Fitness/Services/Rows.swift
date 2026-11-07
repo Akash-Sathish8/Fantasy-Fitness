@@ -88,10 +88,21 @@ nonisolated struct ItemRow: Codable, Sendable {
     let rarity: String
     let effect: String
     let flavor: String
+    /// Optional so a server without the combat-bonus migration, or a snapshot saved before
+    /// it, still decodes; missing means 0.
+    let attackBonus: Int?
+    let defenseBonus: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, slot, rarity, effect, flavor
+        case attackBonus = "attack_bonus"
+        case defenseBonus = "defense_bonus"
+    }
 
     var item: Item? {
         guard let slot = ItemSlot(rawValue: slot), let rarity = Rarity(name: rarity) else { return nil }
-        return Item(id: id, name: name, slot: slot, rarity: rarity, effect: effect, flavor: flavor)
+        return Item(id: id, name: name, slot: slot, rarity: rarity, effect: effect, flavor: flavor,
+                    attackBonus: attackBonus ?? 0, defenseBonus: defenseBonus ?? 0)
     }
 }
 

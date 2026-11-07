@@ -37,9 +37,9 @@ The target, for all new code:
 
 Where the code is today:
 
-- **View model:** `WorkoutSession` covers the workout flow, including quest complete. It's the model for new flows. Other screens use `GameStore` plus local `@State`.
+- **View model:** `WorkoutSession` covers the workout flow, including quest complete. It's the model for new flows; `BattleSession` covers a dungeon fight the same way. Other screens use `GameStore` plus local `@State`.
 - **`GameStore`:** plays the `AppSession` role but is larger than intended. It also holds each tab's data, sign-in, connection-only actions and snapshot mapping.
-- **Rules:** XP, loot and quest rules are in Postgres. Display copies are `EnergyRules` and `Recovery` (`Models/PlayerProfile.swift`) and `GuildRank` (`Services/Rows.swift`).
+- **Rules:** XP, loot and quest rules are in Postgres. Display copies are `EnergyRules` and `Recovery` (`Models/PlayerProfile.swift`) and `GuildRank` (`Services/Rows.swift`). Battle rules are app-side in `Services/BattleRules.swift`, because fights are still decided on the phone (see the known gap below).
 - **Folders:** `Views/` has one folder per tab; `Models/`, `Services/` and `Components/` are shared.
 
 Moving toward the target, without a big rewrite:
@@ -57,6 +57,7 @@ Supabase is the backend and the source of truth for anything that affects reward
 - `supabase/migrations/20261022000100_catalog_data.sql`: items, dungeons, rank exams, quest templates, starter recipes. Safe to re-run.
 - `supabase/migrations/20261101000000_daily_energy.sql`: daily Energy top-up, 4 starting Energy, every dungeon costs 1. Safe to re-run.
 - `supabase/migrations/20261106000000_offline_sync.sql`: retry-safe `submit_workout` and `log_meal`. Safe to re-run.
+- `supabase/migrations/20261107000000_item_combat_bonuses.sql`: `items.attack_bonus` / `defense_bonus` for battles. Safe to re-run.
 - `Fantasy Fitness/Config/Secrets.plist` (gitignored, never commit): `SUPABASE_URL` and `SUPABASE_ANON_KEY`. Copy `Secrets.example.plist` from the repo root to create it. Only the anon/publishable key goes in the app, never the service-role key.
 - `Fantasy Fitness/Services/`: `SupabaseConfig.swift` (reads the secrets, builds the client), `Rows.swift` (Codable row types and mapping to models), `LocalStore.swift` (SwiftData models and on-device storage), `SyncService.swift` (upload queue and refresh), `GameStore.swift` (the single `@Observable` store all views read from via `@Environment(GameStore.self)`).
 - Without a valid `Secrets.plist` the app runs in **offline demo mode** on the sample data in `Models/` (a banner says so); previews use `GameStore.preview`. Demo data lives in memory only. With keys, every screen shows real data from Supabase or its local copy; sample data is never shown to a signed-in player.
@@ -65,7 +66,7 @@ Supabase is the backend and the source of truth for anything that affects reward
 - Players: `profiles` (name, class, rank, xp, generated `level` / `level_start_xp` / `next_level_xp`, energy, bodyweight, macro targets with a 1200 kcal floor, `has_completed_onboarding`), `stats`, `inventory` (one row per owned item, `equipped`).
 - Raw activity (client writes): `workouts`, `workout_sets`, `cardio_logs`, `sleep_logs` (nightly hours only; raw HealthKit stays on device), `meal_logs`. Dates are the player's local date sent by the app.
 - Quests: `quest_templates` (server-only), per-player `quests` and `quest_objectives` (metric, target, progress, is_complete).
-- Catalogs: `items`, `dungeons`, `rank_exams`. Runs: `dungeon_runs`. Exams: `exam_attempts`.
+- Catalogs: `items` (`attack_bonus` / `defense_bonus` are the battle numbers; new gear must set them to match its `effect` text), `dungeons`, `rank_exams`. Runs: `dungeon_runs`. Exams: `exam_attempts`.
 - Tavern: `recipes`, `recipe_ingredients`, `recipe_ratings` (taste / ease / cost), `recipe_summaries` view.
 - `guilds`, `guild_members` (tables only so far). Storage buckets: `avatars`, `recipe-photos`, `lift-videos` (each user writes only under a folder named with their user id).
 
@@ -75,7 +76,7 @@ Supabase is the backend and the source of truth for anything that affects reward
 - New sign-ups get a profile, stats and starter gear from a trigger on `auth.users`.
 - Client RPCs: `complete_onboarding`, `generate_quests(p_today)`, `submit_workout`, `log_meal`, `equip_item` / `unequip_item`, `start_dungeon_run` / `finish_dungeon_run`, `unlocked_exams`, `create_recipe`. Logging meals, sleep and cardio recomputes quest progress via triggers. `complete_workout` remains for older builds; `submit_workout` calls it internally.
 - Stat formulas are placeholders (Strength from best Epley 1RM / bodyweight, Endurance from cardio minutes, Vitality from 7h+ nights) and only ever go up.
-- Known gap: dungeon battles are simulated on the device and the client reports victory. Move resolution server-side before anything competitive.
+- Known gap: dungeon battles are simulated on the device and the client reports victory. Move resolution server-side before anything competitive. The battle engine is seeded from the run id and has no app dependencies, so the server could later replay a fight from the seed and the player's inputs.
 
 **New account starting values**
 - Created by the `on_auth_user_created` trigger: rank F, level 1, 0 XP, **4 Energy** (max 5), all stats 0, starter gear equipped (Iron Helm, Leather Jerkin, Oak Longsword, Copper Ring), default targets 2,400 kcal / 140 g protein / 260 g carbs / 70 g fat.
@@ -177,6 +178,14 @@ Notes:
 - Rest timer (`RestTimerCard` / `RestTimer`) starts automatically after every logged set: ring countdown, −15 s / pause / +30 s / skip, preset lengths 1:00–3:00 (default 1:30), haptic when it ends. It stores an end time, so it stays correct in the background.
 - Each set is saved on the device as it's logged. **Finish workout** queues it for `submit_workout`; the refresh updates quest progress, stats and Energy. Closing with sets asks whether to keep the workout for later or discard it. See "Offline-first data" for the pending and reward flow.
 
+**Battle** (`Views/Dungeons/`)
+- `BattleSession` (state) + `BattleView` (UI), presented from Loadout with `.fullScreenCover`. The engine is `BattleState` in `Services/BattleRules.swift`: Foundation only, seeded from the run id, so it can be simulated, tested or moved to the server. Still SwiftUI; a later SpriteKit scene can drive the same engine.
+- Each turn: the boss shows its next move (Swipe, Heavy swing, Bracing; Enraged below 30% health) → the player picks Strike, Heavy Blow, Guard or the class skill (Warrior Cleave, Ranger Volley, Monk Flurry, Paladin Smite; every 3 turns) → attacks are aimed on the timing meter (gold = critical, green = hit, outside = glancing) → the boss acts.
+- Real stats set the numbers: Health = 100 + Vitality + Endurance/2, Attack = 10 + Strength/4 + gear, Defense = gear; Agility widens the gold zone and Speed slows the meter. Timing only scales a hit between 0.5× and 1.3×, so it can't stand in for training. Loadout shows where each number comes from.
+- Every tuning number is at the top of `BattleRules`. Balance was checked by simulating thousands of fights per dungeon for a new player, the demo player and a strong lifter; re-check after changing them.
+- Win → `finish_dungeon_run(victory: true)` → Loot reveal. If claiming fails, the player can try again (the run stays open on the server). A loss, or fleeing (which asks first, since Energy is already spent), reports `victory: false`. The winning blow stays on screen for 1.4 s before the chest, even when the server answers at once.
+- Layout and motion: the cards must not move between steps, so hidden copies of the action buttons and the meter size the controls, and the boss's move chip keeps its space when the fight ends. Changing text (log line, next move) fades out before the new text fades in; HP and turn numbers roll. The arena scrolls only with large text (starting at the bottom, so actions stay in reach), and actions stack in one column at accessibility sizes.
+
 ## Visual style (Quest Board reference)
 
 Blend of realistic rustic (wood plank board, brass pins, aged parchment) and cartoon (thick brown outlines, flat warm fills, rolled scroll ends with wooden knobs, hard drop shadows). Readability first.
@@ -207,7 +216,7 @@ Quest Board layout (top to bottom): Level/rank pill + Energy pill; wooden sign w
 ## Open questions
 
 - Daily time spent in the game layer (target ~5 minutes)
-- Combat: skill-based or purely stat-based
+- Combat: for now stat-based turns plus a timing meter that only nudges damage (see Battle); revisit before PvP
 - Balancing lifters vs. runners across classes
 - Inactivity: stats plateau (preferred) vs. decay
 - Art style (pixel art is cheapest)

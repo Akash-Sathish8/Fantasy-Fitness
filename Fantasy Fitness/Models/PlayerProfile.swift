@@ -100,14 +100,16 @@ enum EnergyRules {
 }
 
 /// Sleep: a night of at least this many hours earns Well-Rested and +1 Energy
-/// (after_sleep_logged trigger).
+/// (after_sleep_logged trigger). A check-in (log_rested_night) records exactly this.
 enum Recovery {
     static let wellRestedHours = 7.0
 
-    /// "Last night: 7.5 h · Well-Rested", or the goal when nothing is logged yet.
+    /// "Well-Rested · slept 7+ hours", or the goal when last night isn't logged yet.
+    /// A check-in records exactly the threshold, so it doesn't claim a precise number.
     static func summary(lastNight hours: Double?) -> String {
-        guard let hours else { return "Sleep \(wellRestedHours.formatted())+ hours to earn Well-Rested" }
-        let slept = "Last night: \(hours.formatted(.number.precision(.fractionLength(0...1)))) h"
-        return hours >= wellRestedHours ? "\(slept) · Well-Rested" : "\(slept) · aim for \(wellRestedHours.formatted())+"
+        guard let hours else { return "Slept \(wellRestedHours.formatted())+ hours? Check in to earn Well-Rested" }
+        if hours >= wellRestedHours { return "Well-Rested · slept \(wellRestedHours.formatted())+ hours" }
+        let slept = hours.formatted(.number.precision(.fractionLength(0...1)))
+        return "Last night: \(slept) h · aim for \(wellRestedHours.formatted())+"
     }
 }

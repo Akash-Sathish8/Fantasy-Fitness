@@ -37,13 +37,13 @@ struct PinnedNotesGrid: View {
                         .font(.alegreyaSans(22, weight: .bold))
                         .foregroundStyle(Theme.ink)
                         .padding(.top, 6)
-                    Text(store.lastNightSleepHours == nil ? "Earns Well-Rested buff"
-                                                          : Recovery.summary(lastNight: store.lastNightSleepHours))
+                    Text(store.sleep.isWellRested ? "Well-Rested today" : "Earns Well-Rested buff")
                         .font(.alegreyaSans(15, weight: .bold))
                         .foregroundStyle(Theme.positiveText)
                         .padding(.top, 4)
+                    SleepCheckButton(label: "Slept 7+ h last night")
+                        .padding(.top, 6)
                 }
-                .accessibilityElement(children: .combine)
             }
             .fixedSize(horizontal: false, vertical: true)
 

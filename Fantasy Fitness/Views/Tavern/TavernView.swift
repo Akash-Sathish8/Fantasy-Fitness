@@ -5,7 +5,8 @@
 
 import SwiftUI
 
-/// Meal library → Recipe detail → Log meal → Rate recipe. Create recipe is a sheet.
+/// Meal library → Recipe detail → Log meal → Rate recipe. Log a meal and Create recipe
+/// are sheets.
 struct TavernView: View {
     private enum Shelf: Hashable, CaseIterable {
         case library, mine
@@ -22,6 +23,7 @@ struct TavernView: View {
 
     @State private var shelf: Shelf = .library
     @State private var showingCreate = false
+    @State private var showingLogMeal = false
 
     private var visibleRecipes: [Recipe] {
         shelf == .mine ? store.recipes.filter(\.isMine) : store.recipes
@@ -32,6 +34,11 @@ struct TavernView: View {
             BoardSign(title: "Tavern")
 
             RationsCard(rations: store.rations)
+
+            Button { showingLogMeal = true } label: {
+                Label("Log a meal", systemImage: "fork.knife")
+            }
+            .buttonStyle(.chunky(.wax))
 
             WoodSegmentedPicker(options: Shelf.allCases, selection: $shelf, title: \.title)
                 .padding(.top, 4)
@@ -55,6 +62,9 @@ struct TavernView: View {
         }
         .sheet(isPresented: $showingCreate) {
             CreateRecipeSheet()
+        }
+        .sheet(isPresented: $showingLogMeal) {
+            LogMealSheet()
         }
     }
 }

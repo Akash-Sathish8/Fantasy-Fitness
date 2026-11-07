@@ -4,8 +4,8 @@
 //
 //  Keeps the device and Supabase in step. Each pass uploads whatever is queued on the
 //  phone, then replaces the local copy of server-owned data. Runs when the app opens or
-//  returns to the foreground, when the connection comes back, after a workout or meal
-//  is saved, and on pull to refresh. The server decides all rewards; this only reports them.
+//  returns to the foreground, when the connection comes back, after a workout, meal or
+//  sleep check-in is saved, and on pull to refresh. The server decides all rewards; this only reports them.
 //
 
 import Foundation
@@ -29,6 +29,7 @@ final class SyncService {
     private(set) var uploadError: String?
     private(set) var pendingWorkouts = 0
     private(set) var pendingMeals = 0
+    private(set) var pendingSleeps = 0
     private(set) var lastSyncedAt: Date?
     /// Uploaded workouts whose rewards the player hasn't seen yet.
     private(set) var rewards: [UploadedWorkout] = []
@@ -48,12 +49,13 @@ final class SyncService {
         if client != nil { startMonitoring() }
     }
 
-    var pendingCount: Int { pendingWorkouts + pendingMeals }
+    var pendingCount: Int { pendingWorkouts + pendingMeals + pendingSleeps }
 
     /// "1 workout and 2 meals waiting to upload.", or nil when the queue is empty.
     var queueSummary: String? {
-        let parts = [Self.count(pendingWorkouts, "workout"), Self.count(pendingMeals, "meal")].compactMap { $0 }
-        return parts.isEmpty ? nil : parts.joined(separator: " and ") + " waiting to upload."
+        let parts = [Self.count(pendingWorkouts, "workout"), Self.count(pendingMeals, "meal"),
+                     Self.count(pendingSleeps, "sleep check-in")].compactMap { $0 }
+        return parts.isEmpty ? nil : ListFormatter.localizedString(byJoining: parts) + " waiting to upload."
     }
 
     private static func count(_ number: Int, _ noun: String) -> String? {
@@ -76,10 +78,12 @@ final class SyncService {
         guard let user else {
             pendingWorkouts = 0
             pendingMeals = 0
+            pendingSleeps = 0
             return
         }
         pendingWorkouts = local.pendingWorkouts(for: user).count
         pendingMeals = local.meals(for: user).filter { $0.uploadedAt == nil }.count
+        pendingSleeps = local.sleeps(for: user).filter { $0.uploadedAt == nil }.count
     }
 
     // MARK: - Running a sync
@@ -135,11 +139,13 @@ final class SyncService {
             try await client.rpc("generate_quests", params: ["p_today": today]).execute()
             try await uploadWorkouts(client, user: user)
             try await uploadMeals(client, user: user)
+            try await uploadSleeps(client, user: user)
             let snapshot = try await fetchSnapshot(client, user: user, email: session.user.email, today: today)
 
             guard self.user == user else { return }  // logged out meanwhile
             try local.save(snapshot, for: user)
             try local.deleteUploadedMeals(for: user)
+            try local.deleteUploadedSleeps(for: user)
             lastSyncedAt = snapshot.fetchedAt
             refreshError = nil
             isOffline = false
@@ -207,6 +213,24 @@ final class SyncService {
             } catch {
                 let message = ServerError.message(for: error)
                 meal.lastError = message
+                uploadError = message
+            }
+            try local.save()
+            queueChanged()
+        }
+    }
+
+    private func uploadSleeps(_ client: SupabaseClient, user: UUID) async throws {
+        for sleep in local.sleeps(for: user) where sleep.uploadedAt == nil {
+            do {
+                try await client.rpc("log_rested_night", params: ["p_night_of": sleep.nightOf]).execute()
+                sleep.uploadedAt = .now
+                sleep.lastError = nil
+            } catch let error where ServerError.isUnreachable(error) || ServerError.isCancelled(error) {
+                throw error
+            } catch {
+                let message = ServerError.message(for: error)
+                sleep.lastError = message
                 uploadError = message
             }
             try local.save()

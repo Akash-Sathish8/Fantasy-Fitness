@@ -2,7 +2,7 @@
 //  LocalStore.swift
 //  Fantasy Fitness
 //
-//  The on-device SwiftData store. Player-created logs (workouts, sets, meals) are saved
+//  The on-device SwiftData store. Player-created logs (workouts, sets, meals, sleep) are saved
 //  here first and stay until the server has them. Server-owned data is kept as one
 //  snapshot per player, replaced whole on every refresh because the server always wins.
 //
@@ -87,6 +87,24 @@ final class LocalMeal {
     var macros: Macros { Macros(calories: calories, protein: protein, carbs: carbs, fat: fat) }
 }
 
+/// A "slept 7+ hours" check-in for one night. Like meals, kept after upload until a
+/// refresh includes it, so the check doesn't flicker off.
+@Model
+final class LocalSleep {
+    @Attribute(.unique) var id: UUID
+    var userID: UUID
+    /// Local date the night began (yesterday, when checking in the next morning).
+    var nightOf: String
+    var uploadedAt: Date?
+    var lastError: String?
+
+    init(userID: UUID, nightOf: String) {
+        id = UUID()
+        self.userID = userID
+        self.nightOf = nightOf
+    }
+}
+
 /// The last `ServerSnapshot` for a player, as JSON. If a future version can't decode
 /// it, that just counts as an empty cache and the next refresh replaces it.
 @Model
@@ -106,7 +124,7 @@ final class LocalStore {
     private let context: ModelContext
 
     init(inMemory: Bool = false) {
-        let schema = Schema([LocalWorkout.self, LocalSet.self, LocalMeal.self, CachedSnapshot.self])
+        let schema = Schema([LocalWorkout.self, LocalSet.self, LocalMeal.self, LocalSleep.self, CachedSnapshot.self])
         let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: inMemory)
         do {
             context = ModelContext(try ModelContainer(for: schema, configurations: configuration))
@@ -230,6 +248,23 @@ final class LocalStore {
     /// Forgets uploaded meals once the refreshed snapshot includes them.
     func deleteUploadedMeals(for user: UUID) throws {
         for meal in meals(for: user) where meal.uploadedAt != nil { context.delete(meal) }
+        try context.save()
+    }
+
+    // MARK: - Sleep
+
+    func addSleep(_ sleep: LocalSleep) throws {
+        context.insert(sleep)
+        try context.save()
+    }
+
+    /// Every check-in not yet part of a refresh, uploaded or not.
+    func sleeps(for user: UUID) -> [LocalSleep] {
+        (try? context.fetch(FetchDescriptor(predicate: #Predicate<LocalSleep> { $0.userID == user }))) ?? []
+    }
+
+    func deleteUploadedSleeps(for user: UUID) throws {
+        for sleep in sleeps(for: user) where sleep.uploadedAt != nil { context.delete(sleep) }
         try context.save()
     }
 

@@ -4,7 +4,7 @@
 //
 //  The app's single source of player data. Views read it from here; it shows the
 //  local cache straight away and SyncService keeps that cache in step with Supabase.
-//  Workouts and meals are saved on the device first. Actions the server has to decide
+//  Workouts, meals and sleep check-ins (SleepService) are saved on the device first. Actions the server has to decide
 //  on the spot (gear, dungeons, recipes) need a connection and call it directly.
 //  Without Config/Secrets.plist it runs in offline demo mode on sample data.
 //
@@ -25,8 +25,6 @@ final class GameStore {
     private(set) var isSignedIn = false
     private(set) var loadState: LoadState = .idle
     private(set) var profile: PlayerProfile?
-    /// Hours slept last night, if the player has logged it.
-    private(set) var lastNightSleepHours: Double?
     private(set) var accountEmail: String?
     private(set) var quests: [QuestKind: Quest] = [:]
     private(set) var inventory: [Item] = []
@@ -43,6 +41,7 @@ final class GameStore {
 
     @ObservationIgnored let client: SupabaseClient?
     @ObservationIgnored let sync: SyncService
+    @ObservationIgnored let sleep: SleepService
     @ObservationIgnored private let local: LocalStore
     @ObservationIgnored private var userID: UUID?
     @ObservationIgnored private var catalog: [String: Item] = [:]
@@ -52,6 +51,7 @@ final class GameStore {
         self.client = client
         local = LocalStore(inMemory: client == nil)
         sync = SyncService(client: client, local: local)
+        sleep = SleepService(local: local, sync: sync)
         sync.onSnapshot = { [weak self] in self?.apply($0) }
     }
 
@@ -139,12 +139,12 @@ final class GameStore {
         try? await client?.auth.signOut()
         if let userID { try? local.deleteSnapshot(for: userID) }
         sync.setUser(nil)
+        sleep.setUser(nil)
         isSignedIn = false
         loadState = .idle
         userID = nil
         latestSnapshot = nil
         accountEmail = nil
-        lastNightSleepHours = nil
         profile = nil
         quests = [:]
         inventory = []
@@ -186,6 +186,7 @@ final class GameStore {
     private func startUsing(_ user: UUID) {
         userID = user
         sync.setUser(user)
+        sleep.setUser(user)
         workoutDraft = local.draft(for: user)
     }
 
@@ -243,7 +244,7 @@ final class GameStore {
             } + notYetServed.reduce(Macros.zero) { $0 + $1.macros },
             target: snapshot.profile.targets
         )
-        lastNightSleepHours = snapshot.lastSleep.flatMap { $0.nightOf >= LocalDate.yesterday() ? $0.hours : nil }
+        sleep.apply(snapshot.lastSleep)
         isSignedIn = true
         loadState = .loaded
     }
@@ -263,7 +264,7 @@ final class GameStore {
         recipes = Recipe.samples
         rations = .sample
         unlockedExam = .sample
-        lastNightSleepHours = 7.5
+        sleep.setUser(nil, isDemo: true)
         isSignedIn = true
         loadState = .loaded
         // Demo workouts go through the same local store, which only needs some id.

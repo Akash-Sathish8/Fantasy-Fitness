@@ -59,7 +59,7 @@ Supabase is the backend and the source of truth for anything that affects reward
 - `supabase/migrations/20261022000100_catalog_data.sql`: items, dungeons, rank exams, quest templates, starter recipes. Safe to re-run.
 - `supabase/migrations/20261101000000_daily_energy.sql`: daily Energy top-up, 4 starting Energy, every dungeon costs 1. Safe to re-run.
 - `supabase/migrations/20261106000000_offline_sync.sql`: retry-safe `submit_workout` and `log_meal`. Safe to re-run.
-- `supabase/migrations/20261107000000_item_combat_bonuses.sql`: `items.attack_bonus` / `defense_bonus` for battles. Safe to re-run.
+- `supabase/migrations/20261107000100_item_combat_bonuses.sql`: `items.attack_bonus` / `defense_bonus` for battles. Safe to re-run.
 - `supabase/migrations/20261107000000_sleep_check_in.sql`: `log_rested_night(p_night_of)`, the sleep check-in. Safe to re-run.
 - `Fantasy Fitness/Config/Secrets.plist` (gitignored, never commit): `SUPABASE_URL` and `SUPABASE_ANON_KEY`. Copy `Secrets.example.plist` from the repo root to create it. Only the anon/publishable key goes in the app, never the service-role key.
 - `Fantasy Fitness/Services/`: `SupabaseConfig.swift` (reads the secrets, builds the client), `Rows.swift` (Codable row types and mapping to models), `LocalStore.swift` (SwiftData models and on-device storage), `SyncService.swift` (upload queue and refresh), `SleepService.swift` (sleep check-in), `GameStore.swift` (the single `@Observable` store all views read from via `@Environment(GameStore.self)`).
@@ -133,6 +133,7 @@ Other storage:
 1. Create a project at supabase.com.
 2. Run every file in `supabase/migrations/` in name order (SQL Editor, or `supabase link` + `supabase db push`).
    - Pick one way and stick to it. Supabase's GitHub integration (and `db push`) tracks applied files in `supabase_migrations.schema_migrations`. A file run by hand in the SQL Editor isn't recorded there, so the integration tries to run it again and fails (e.g. `type "guild_class" already exists`). After running one by hand, record it: `insert into supabase_migrations.schema_migrations (version, name) values ('<timestamp>', '<name>') on conflict do nothing;`
+   - Every migration needs a unique timestamp. Supabase identifies a file by the number before the underscore only, so two files with the same number clash (`duplicate key ... schema_migrations_pkey`) and the second never runs. Before adding a file, check the newest number in `supabase/migrations/` (on an up-to-date `main`) and use a later one.
 3. Put the Project URL and anon key in `Config/Secrets.plist`.
 4. Auth providers: Email is on by default. Apple needs the bundle ID `com.appteamcarolina.Fantasy-Fitness` under Client IDs plus the Sign in with Apple capability in Xcode. Google needs a Google Cloud OAuth client. Add `fantasyfitness://login-callback` under Authentication → URL Configuration → Redirect URLs.
 

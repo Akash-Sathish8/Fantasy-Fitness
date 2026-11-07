@@ -44,23 +44,25 @@ struct LoadoutView: View {
 
             BoardSectionHeader(title: "Your power")
             ParchmentCard(padding: 16) {
-                // Combat stats come from real training; gear only adds in-game bonuses.
-                ForEach([StatKind.strength, .endurance, .agility]) { stat in
-                    HStack(spacing: 10) {
-                        Image(systemName: stat.systemImage)
-                            .font(.system(size: 17, weight: .bold))
-                            .foregroundStyle(stat.palette.fill)
-                            .frame(width: 26)
-                        Text(stat.name)
-                            .font(.alegreyaSans(17, weight: .bold))
-                            .foregroundStyle(Theme.ink)
-                        Spacer()
-                        Text("\(profile.stats[stat] ?? 0)")
-                            .font(.alegreyaSans(18, weight: .bold))
-                            .foregroundStyle(Theme.ink)
-                    }
-                    .padding(.vertical, 6)
-                }
+                // Combat numbers come from real training; gear only adds in-game bonuses.
+                let fighter = Fighter(profile: profile)
+                powerRow("Health", value: "\(fighter.maxHealth)", systemImage: "heart.fill",
+                         tint: StatKind.vitality.palette.fill,
+                         detail: "\(BattleRules.baseHealth) base + \(fighter.healthFromVitality) Vitality + \(fighter.healthFromEndurance) Endurance")
+                powerRow("Attack", value: "\(fighter.attack)", systemImage: "bolt.fill",
+                         tint: StatKind.strength.palette.fill,
+                         detail: "\(BattleRules.baseAttack) base + \(fighter.attackFromStrength) Strength + \(fighter.attackFromGear) gear")
+                powerRow("Defense", value: "\(fighter.defense)", systemImage: "shield.fill",
+                         tint: Theme.sapphire, detail: "From equipped armor")
+                powerRow("Critical zone", value: "\(Int((fighter.goldZone * 100).rounded()))%", systemImage: "scope",
+                         tint: StatKind.agility.palette.fill, detail: "Gold on the timing meter, wider with Agility")
+                powerRow(fighter.skill.name, value: "", systemImage: fighter.skill.systemImage,
+                         tint: profile.guildClass.palette.fill,
+                         detail: "\(profile.guildClass.name) skill: \(fighter.skill.summary.lowercased()), every \(BattleRules.skillCooldown) turns")
+                Text("Health and Attack grow with your real training. Gear adds in\u{2011}game bonuses only.")
+                    .font(.alegreyaSans(14))
+                    .foregroundStyle(Theme.inkSecondary)
+                    .padding(.top, 8)
             }
 
             BoardSectionHeader(title: "Equipped") {
@@ -108,6 +110,33 @@ struct LoadoutView: View {
             }
             .holdsRewardReveals()
         }
+    }
+
+    /// One combat number with where it comes from, e.g. "Attack 25 · 10 base + 10 Strength + 5 gear".
+    private func powerRow(_ title: String, value: String, systemImage: String, tint: Color,
+                          detail: String) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: systemImage)
+                .font(.system(size: 17, weight: .bold))
+                .foregroundStyle(tint)
+                .frame(width: 26)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title)
+                    .font(.alegreyaSans(17, weight: .bold))
+                    .foregroundStyle(Theme.ink)
+                Text(detail)
+                    .font(.alegreyaSans(13))
+                    .foregroundStyle(Theme.inkSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer()
+            Text(value)
+                .font(.alegreyaSans(18, weight: .bold))
+                .foregroundStyle(Theme.ink)
+                .monospacedDigit()
+        }
+        .padding(.vertical, 6)
+        .accessibilityElement(children: .combine)
     }
 }
 

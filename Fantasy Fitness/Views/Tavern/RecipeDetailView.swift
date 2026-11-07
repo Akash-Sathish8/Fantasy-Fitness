@@ -114,7 +114,8 @@ struct RecipeDetailView: View {
     }
 }
 
-private struct MacroTile: View {
+/// One macro value on a small parchment tile (recipe detail, Log a meal).
+struct MacroTile: View {
     let value: String
     let label: String
 

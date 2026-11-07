@@ -12,6 +12,7 @@ struct GuildHallView: View {
 
     @Environment(GameStore.self) private var store
     @State private var showingSettings = false
+    @State private var showingLogMeal = false
     @State private var activeWorkout: ActiveWorkout?
 
     private var profile: PlayerProfile { store.player }
@@ -39,12 +40,17 @@ struct GuildHallView: View {
                 TodayRow(palette: .emerald, systemImage: "fork.knife",
                          title: "Ration duty",
                          detail: "Protein \(rations.eaten.protein) / \(rations.target.protein) g",
-                         progress: rations.progress(\.protein))
+                         progress: rations.progress(\.protein)) {
+                    Button("Log meal") { showingLogMeal = true }
+                        .buttonStyle(.chunky(.emerald, minHeight: 44, fullWidth: false, fontSize: 16))
+                }
                 DashedDivider()
                 TodayRow(palette: .sapphire, systemImage: "moon.zzz.fill",
                          title: "Rest at the inn",
-                         detail: Recovery.summary(lastNight: store.lastNightSleepHours),
-                         progress: store.lastNightSleepHours.map { $0 / Recovery.wellRestedHours })
+                         detail: Recovery.summary(lastNight: store.sleep.lastNightHours),
+                         progress: store.sleep.lastNightHours.map { $0 / Recovery.wellRestedHours }) {
+                    SleepCheckButton(label: "Slept 7+ h")
+                }
             }
 
             Button {
@@ -77,6 +83,9 @@ struct GuildHallView: View {
             .padding(.top, 12)
         }
         .workoutSessionCover($activeWorkout)
+        .sheet(isPresented: $showingLogMeal) {
+            LogMealSheet()
+        }
         .sheet(isPresented: $showingSettings) {
             SettingsSheet(onLogOut: {
                 showingSettings = false
@@ -108,34 +117,47 @@ struct GuildHallView: View {
     }
 }
 
-/// One of today's quests: emblem, title, detail and optional progress.
-private struct TodayRow: View {
+/// One of today's quests: emblem, title, detail, optional progress and an optional
+/// action (Log meal, sleep check-in) on its own line below.
+private struct TodayRow<Action: View>: View {
     let palette: CartoonPalette
     let systemImage: String
     let title: String
     let detail: String
     let progress: Double?
+    @ViewBuilder var action: Action
 
     var body: some View {
-        HStack(spacing: 14) {
+        HStack(alignment: .top, spacing: 14) {
             EmblemBadge(palette: palette, size: 42) {
                 Image(systemName: systemImage)
             }
             VStack(alignment: .leading, spacing: 4) {
-                Text(title)
-                    .font(.alegreyaSans(18, weight: .bold))
-                    .foregroundStyle(Theme.ink)
-                Text(detail)
-                    .font(.alegreyaSans(15))
-                    .foregroundStyle(Theme.inkSecondary)
-                if let progress {
-                    ParchmentProgressBar(progress: progress, height: 10)
-                        .padding(.top, 2)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(title)
+                        .font(.alegreyaSans(18, weight: .bold))
+                        .foregroundStyle(Theme.ink)
+                    Text(detail)
+                        .font(.alegreyaSans(15))
+                        .foregroundStyle(Theme.inkSecondary)
+                    if let progress {
+                        ParchmentProgressBar(progress: progress, height: 10)
+                            .padding(.top, 2)
+                    }
                 }
+                .accessibilityElement(children: .combine)
+                action
+                    .padding(.top, 4)
             }
         }
         .padding(.vertical, 10)
-        .accessibilityElement(children: .combine)
+    }
+}
+
+extension TodayRow where Action == EmptyView {
+    init(palette: CartoonPalette, systemImage: String, title: String, detail: String, progress: Double?) {
+        self.init(palette: palette, systemImage: systemImage, title: title, detail: detail,
+                  progress: progress) { EmptyView() }
     }
 }
 

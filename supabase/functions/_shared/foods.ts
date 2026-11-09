@@ -1,7 +1,8 @@
 // Saving foods with the service role, and the shape the app receives.
 //
 // The database computes meal and recipe macros from these rows, so only the functions
-// write them. USDA rows are shared by everyone.
+// write them: USDA rows are shared by everyone, and an estimate from a photo scan
+// belongs to the player who scanned it.
 
 import type { SupabaseClient } from "npm:@supabase/supabase-js@2.118.0";
 import type { NormalizedFood, Per100g, Portion } from "./usda.ts";
@@ -14,6 +15,10 @@ export interface FoodJson {
   detail: string;
   per_100g: Per100g;
   portions: Portion[];
+}
+
+export interface EstimateFood extends Per100g {
+  name: string;
 }
 
 /** Upserts on fdc_id and returns one food per input, in the order given, with row ids. */
@@ -54,6 +59,28 @@ export async function saveUsdaFoods(
   });
 }
 
+/** Inserts one player's photo estimates and returns them in the order given. */
+export async function saveEstimateFoods(
+  db: SupabaseClient,
+  userId: string,
+  estimates: EstimateFood[],
+): Promise<FoodJson[]> {
+  if (estimates.length === 0) return [];
+  const rows = estimates.map((estimate) => ({
+    id: crypto.randomUUID(),
+    source: "estimate",
+    name: estimate.name,
+    kcal_100g: estimate.kcal,
+    protein_100g: estimate.protein,
+    carbs_100g: estimate.carbs,
+    fat_100g: estimate.fat,
+    created_by: userId,
+  }));
+  const { error } = await db.from("foods").insert(rows);
+  if (error) throw new Error(`Saving estimated foods failed: ${error.message}`);
+  return rows.map((row, index) => estimateJson(row.id, estimates[index]));
+}
+
 export function usdaJson(id: string, food: NormalizedFood): FoodJson {
   return {
     id,
@@ -69,5 +96,21 @@ export function usdaJson(id: string, food: NormalizedFood): FoodJson {
       fat: food.fat,
     },
     portions: food.portions,
+  };
+}
+
+export function estimateJson(id: string, food: EstimateFood): FoodJson {
+  return {
+    id,
+    source: "estimate",
+    name: food.name,
+    detail: "Estimated from your photo",
+    per_100g: {
+      kcal: food.kcal,
+      protein: food.protein,
+      carbs: food.carbs,
+      fat: food.fat,
+    },
+    portions: [],
   };
 }

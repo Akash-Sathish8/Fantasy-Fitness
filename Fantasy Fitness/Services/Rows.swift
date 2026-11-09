@@ -381,6 +381,32 @@ nonisolated struct FoodSearchResponse: Decodable, Sendable {
     let foods: [FoodRow]
 }
 
+/// What scan-meal found in a photo (supabase/functions/scan-meal/index.ts).
+nonisolated struct ScanResponseRow: Decodable, Sendable {
+    let isFood: Bool
+    let mealName: String
+    let scansLeft: Int
+    let items: [ItemRow]
+
+    enum CodingKeys: String, CodingKey {
+        case items
+        case isFood = "is_food"
+        case mealName = "meal_name"
+        case scansLeft = "scans_left"
+    }
+
+    nonisolated struct ItemRow: Decodable, Sendable {
+        let label: String
+        let grams: Double
+        let food: FoodRow
+    }
+
+    var scan: PlateScan {
+        PlateScan(isFood: isFood, mealName: mealName, scansLeft: scansLeft,
+                  items: items.map { PlateItem(food: $0.food.food, grams: $0.grams, photoLabel: $0.label) })
+    }
+}
+
 /// How the Edge Functions report an error: {"error": {"code": "...", "message": "..."}}.
 nonisolated struct FunctionErrorBody: Decodable, Sendable {
     let error: Detail

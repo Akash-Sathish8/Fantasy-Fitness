@@ -59,8 +59,24 @@ struct PlateItem: Identifiable, Hashable {
     let id = UUID()
     var food: Food
     var grams: Double
+    /// What the plate reader called it ("Grilled chicken breast"), for foods from a photo.
+    var photoLabel: String? = nil
 
     var macros: Macros { FoodMath.total([(food.per100g, grams)]) }
+    /// The photo's name for the food when there is one, otherwise the food's short name.
+    var title: String { photoLabel ?? food.shortName }
+}
+
+/// What the plate reader found in a meal photo (the scan-meal Edge Function). Each food is
+/// already saved on the server: the closest USDA match, or the model's own estimate, which
+/// belongs to this player.
+struct PlateScan {
+    /// False when the photo shows no food or drink; `items` is empty then.
+    let isFood: Bool
+    let mealName: String
+    /// Photo scans the player has left over the last 24 hours.
+    let scansLeft: Int
+    let items: [PlateItem]
 }
 
 /// An ingredient while a recipe is being written: picked from the food search (counted
@@ -149,6 +165,12 @@ extension Food {
                [Portion(label: "1 medium", grams: 182)]),
     ]
 
+    /// A food the plate reader estimated (demo mode's scan).
+    static let sampleEstimate = Food(
+        id: UUID(uuidString: "00000000-0000-4000-8000-000000000101")!, source: .estimate, name: "Teriyaki sauce",
+        detail: "Estimated from your photo", per100g: Per100g(kcal: 89, protein: 5.9, carbs: 15.6, fat: 0),
+        portions: [])
+
     /// Demo search: each word typed must start a word of the name, so "oil" finds olive oil,
     /// not "boiled".
     static func sampleSearch(_ query: String) -> [Food] {
@@ -164,5 +186,17 @@ extension Food {
         Food(id: UUID(uuidString: String(format: "00000000-0000-4000-8000-%012d", number))!,
              source: .usda, name: name, detail: detail,
              per100g: Per100g(kcal: kcal, protein: protein, carbs: carbs, fat: fat), portions: portions)
+    }
+}
+
+extension PlateScan {
+    /// Demo mode's answer to any photo: three USDA foods and one estimate.
+    static var sample: PlateScan {
+        PlateScan(isFood: true, mealName: "Chicken, rice and broccoli", scansLeft: 17, items: [
+            PlateItem(food: Food.samples[0], grams: 150, photoLabel: "Grilled chicken breast"),
+            PlateItem(food: Food.samples[1], grams: 180, photoLabel: "White rice"),
+            PlateItem(food: Food.samples[2], grams: 90, photoLabel: "Steamed broccoli"),
+            PlateItem(food: Food.sampleEstimate, grams: 30, photoLabel: "Teriyaki sauce"),
+        ])
     }
 }

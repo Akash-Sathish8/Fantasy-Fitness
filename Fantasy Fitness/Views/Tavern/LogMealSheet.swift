@@ -5,25 +5,33 @@
 
 import SwiftUI
 
-/// Pick the meal you ate; its nutrition fills in from the recipe (one serving).
+/// Pick the meal you ate; its nutrition fills in from the recipe (one serving). Or build a
+/// plate from a photo or searched foods (`PlateSheet`).
 /// The meal counts toward today's rations right away and uploads with the next sync.
 struct LogMealSheet: View {
     @Environment(GameStore.self) private var store
     @Environment(\.dismiss) private var dismiss
     @State private var selectedID: Recipe.ID?
-    @State private var showingPlate = false
+    @State private var plate: PlateStart?
+
+    /// Opening Build a plate, with the photo just picked or empty for searching.
+    private struct PlateStart: Identifiable {
+        let id = UUID()
+        var photo: MealPhotoSource?
+    }
 
     private var selected: Recipe? { store.recipes.first { $0.id == selectedID } }
 
     var body: some View {
         SheetScaffold(title: "Log a meal", closeLabel: "Cancel") {
-            Button { showingPlate = true } label: {
-                Label("Build a plate from foods", systemImage: "magnifyingglass")
+            // Side by side, stacked when they don't fit (large text, small phones).
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 10) { plateButtons }
+                VStack(spacing: 10) { plateButtons }
             }
-            .buttonStyle(.chunky(.wood, minHeight: 48, fontSize: 17))
             .padding(.bottom, 6)
             if store.recipes.isEmpty {
-                Text("No meals in the library yet. Build a plate, or create a recipe in the Tavern.")
+                Text("No meals in the library yet. Snap a photo or search foods, or create a recipe in the Tavern.")
                     .font(.alegreyaSans(16))
                     .foregroundStyle(Theme.inkSecondary)
             }
@@ -47,9 +55,17 @@ struct LogMealSheet: View {
             summary
         }
         .presentationDetents([.large])
-        .sheet(isPresented: $showingPlate) {
-            PlateSheet { dismiss() }
+        .sheet(item: $plate) { start in
+            PlateSheet(initialPhoto: start.photo) { dismiss() }
         }
+    }
+
+    @ViewBuilder private var plateButtons: some View {
+        MealPhotoButton { plate = PlateStart(photo: $0) }
+        Button { plate = PlateStart() } label: {
+            Label("Search foods", systemImage: "magnifyingglass")
+        }
+        .buttonStyle(.chunky(.wood, minHeight: 48, fontSize: 17))
     }
 
     /// The chosen meal's nutrition and the Log button, pinned below the list.

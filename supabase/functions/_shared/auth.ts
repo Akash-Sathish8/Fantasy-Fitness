@@ -1,7 +1,7 @@
 // The service-role client and the signed-in player behind a request.
 //
-// The functions write with the service role, so they must check who is calling
-// themselves rather than rely on row-level security.
+// The functions write foods and scans with the service role, so they must check who is
+// calling themselves rather than rely on row-level security.
 
 import {
   createClient,

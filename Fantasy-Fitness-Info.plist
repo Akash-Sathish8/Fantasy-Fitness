@@ -3,7 +3,10 @@
 <plist version="1.0">
 <dict>
 	<!-- Merged with the build-generated Info.plist. Registers fantasyfitness:// so
-	     Supabase email confirmation links open the app. -->
+	     Supabase email confirmation links open the app, and explains the camera
+	     (Tavern: snap a meal for the plate reader). -->
+	<key>NSCameraUsageDescription</key>
+	<string>Snap your meal so the Tavern can list what's on the plate. Photos are sent to Anthropic's Claude to be read; Fantasy Fitness doesn't keep them.</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>

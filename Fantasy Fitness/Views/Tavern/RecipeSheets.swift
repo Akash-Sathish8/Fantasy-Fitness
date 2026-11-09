@@ -69,6 +69,7 @@ struct CreateRecipeSheet: View {
     @State private var servings = 1
     @State private var ingredients: [RecipeIngredientDraft] = []
     @State private var isSearching = false
+    @State private var isKeyboardUp = false
     @Environment(\.dismiss) private var dismiss
 
     private var countedCount: Int { ingredients.filter(\.isCounted).count }
@@ -106,7 +107,10 @@ struct CreateRecipeSheet: View {
             }
             .padding(.top, 8)
 
-            Button { isSearching = true } label: {
+            Button {
+                UIApplication.shared.endEditing()  // or the keyboard comes back when the search closes
+                isSearching = true
+            } label: {
                 Label("Add ingredient", systemImage: "plus")
             }
             .buttonStyle(.chunky(.wood, minHeight: 48, fontSize: 17))
@@ -119,10 +123,10 @@ struct CreateRecipeSheet: View {
                     .foregroundStyle(Theme.ink)
                     .padding(.top, 20)
                 HStack(spacing: 8) {
-                    MacroTile(value: "\(perServing.calories)", label: "kcal")
-                    MacroTile(value: "\(perServing.protein) g", label: "protein")
-                    MacroTile(value: "\(perServing.carbs) g", label: "carbs")
-                    MacroTile(value: "\(perServing.fat) g", label: "fat")
+                    MacroTile(value: perServing.calories.formatted(), label: "kcal")
+                    MacroTile(value: "\(perServing.protein.formatted()) g", label: "protein")
+                    MacroTile(value: "\(perServing.carbs.formatted()) g", label: "carbs")
+                    MacroTile(value: "\(perServing.fat.formatted()) g", label: "fat")
                 }
                 .padding(.top, 8)
             }
@@ -133,8 +137,8 @@ struct CreateRecipeSheet: View {
                 .padding(.top, 10)
 
             Button("Save recipe") {
+                isSaving = true  // before the task starts, so a quick second tap can't save twice
                 Task {
-                    isSaving = true
                     if await store.createRecipe(name: name, mealType: mealType, servings: servings,
                                                 ingredients: ingredients) {
                         dismiss()
@@ -146,13 +150,21 @@ struct CreateRecipeSheet: View {
                 .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty || ingredients.isEmpty || isSaving)
                 .padding(.top, 18)
         }
+        .scrollDismissesKeyboard(.interactively)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if isKeyboardUp { KeyboardDoneBar() }
+        }
+        .tracksKeyboard($isKeyboardUp)
+        // A swipe down shouldn't throw away a recipe in progress; Cancel still does.
+        .interactiveDismissDisabled(!ingredients.isEmpty || !name.isEmpty)
         .sheet(isPresented: $isSearching) {
             FoodSearchSheet(allowsTextOnly: true) { pick in
                 withAnimation(.snappy) {
                     switch pick {
                     case .food(let food):
                         ingredients.append(RecipeIngredientDraft(name: String(food.name.prefix(FoodLimits.nameLength)),
-                                                                 amount: "", food: food, grams: food.defaultGrams))
+                                                                 amount: "", food: food,
+                                                                 grams: food.defaultGrams(in: FoodLimits.recipeGrams)))
                     case .textOnly(let text):
                         ingredients.append(RecipeIngredientDraft(name: String(text.prefix(FoodLimits.nameLength)),
                                                                  amount: "", food: nil, grams: 0))
@@ -167,7 +179,7 @@ struct CreateRecipeSheet: View {
             return "Search for each ingredient and the Tavern works out the macros per serving."
         }
         if countedCount == ingredients.count {
-            return "Counted from all \(countedCount) ingredient\(countedCount == 1 ? "" : "s")."
+            return countedCount == 1 ? "Counted from the ingredient above." : "Counted from all \(countedCount) ingredients."
         }
         return "Counted from \(countedCount) of \(ingredients.count) ingredients. Searched foods count; typed-in ones don't."
     }
@@ -194,7 +206,17 @@ private struct ServingsStepper: View {
             step("plus", label: "More servings") { servings += 1 }
                 .disabled(servings >= FoodLimits.recipeServings.upperBound)
         }
-        .accessibilityElement(children: .contain)
+        // One VoiceOver stop: "Serves, 4", swipe up or down to change.
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Serves")
+        .accessibilityValue("\(servings)")
+        .accessibilityAdjustableAction { direction in
+            switch direction {
+            case .increment where servings < FoodLimits.recipeServings.upperBound: servings += 1
+            case .decrement where servings > FoodLimits.recipeServings.lowerBound: servings -= 1
+            default: break
+            }
+        }
     }
 
     private func step(_ systemImage: String, label: String, action: @escaping () -> Void) -> some View {
@@ -224,7 +246,7 @@ private struct IngredientDraftRow: View {
                         .lineLimit(2)
                     if let food = ingredient.food {
                         let macros = FoodMath.total([(food.per100g, ingredient.grams)])
-                        Text("\(macros.calories) kcal · \(macros.protein) g protein")
+                        Text("\(macros.calories)\u{00A0}kcal · \(macros.protein)\u{00A0}g protein")
                             .font(.alegreyaSans(15, weight: .bold))
                             .foregroundStyle(Theme.kicker)
                     } else {

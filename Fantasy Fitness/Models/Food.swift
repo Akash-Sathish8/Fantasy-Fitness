@@ -24,8 +24,13 @@ struct Food: Identifiable, Hashable {
     /// Household measures from USDA, like "1 medium breast" = 120 g.
     let portions: [Portion]
 
-    /// Grams to start from when this food is picked: its first portion, or 100 g.
-    var defaultGrams: Double { portions.first?.grams ?? 100 }
+    /// Grams to start from when this food is picked: its first portion, or 100 g, kept inside
+    /// the limits (a portion can be a pinch under 1 g, or a whole melon), so a new plate or
+    /// recipe is never refused.
+    func defaultGrams(in range: ClosedRange<Double>) -> Double {
+        let grams = ((portions.first?.grams ?? 100) * 10).rounded() / 10
+        return min(max(grams, range.lowerBound), range.upperBound)
+    }
 
     /// USDA names run long ("Chicken breast, grilled without sauce, skin not eaten"). The
     /// first part names the food, unless it's a one-word category ("Oil, olive", "Rice, white").
@@ -144,10 +149,14 @@ extension Food {
                [Portion(label: "1 medium", grams: 182)]),
     ]
 
-    /// Demo search: foods whose name contains every word typed.
+    /// Demo search: each word typed must start a word of the name, so "oil" finds olive oil,
+    /// not "boiled".
     static func sampleSearch(_ query: String) -> [Food] {
         let words = query.lowercased().split(separator: " ")
-        return samples.filter { food in words.allSatisfy { food.name.lowercased().contains($0) } }
+        return samples.filter { food in
+            let nameWords = food.name.lowercased().split(whereSeparator: { !$0.isLetter && !$0.isNumber })
+            return words.allSatisfy { word in nameWords.contains { $0.hasPrefix(word) } }
+        }
     }
 
     private static func sample(_ number: Int, _ name: String, _ detail: String, _ kcal: Double, _ protein: Double,

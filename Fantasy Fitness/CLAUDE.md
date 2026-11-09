@@ -193,6 +193,7 @@ Notes:
 **Logging meals** (`Views/Tavern/LogMealSheet.swift`)
 - "Log a meal" (Tavern, under today's rations) and "Log meal" (Guild Hall, Ration duty row) open a sheet listing the meal library by meal type. Picking one fills in its nutrition (one serving: kcal, protein, carbs, fat) above the Log button. Logging saves it on the device (`GameStore.logMeal`); the server refills the real macros from the recipe. Recipe detail still has its own Log meal button.
 - "Build a plate from foods" at the top opens `PlateSheet`: add each food from the food search (`FoodSearchSheet`), set grams with `GramsEditor` (type, − / +, or tap a USDA portion like "1 cup, cooked · 158 g"), swap or remove foods, name the meal (it suggests one), and log. `GameStore.logPlate` saves it on the device; the totals shown are a preview until the server's arrive.
+- The grams field always shows what will be saved: focusing it selects the amount, typing past a limit snaps to it, and − / + / portions update it while it's being edited. While typing, a Done bar replaces the totals. A swipe down can't throw away a plate or a recipe in progress; Cancel can.
 
 **Creating recipes** (`Views/Tavern/RecipeSheets.swift`)
 - Name, meal type, servings (1–50), then ingredients. "Add ingredient" opens the food search; a searched food gets grams and counts toward the macros, and "Add "…" without nutrition" keeps a typed-in ingredient that isn't counted. A live "Per serving" preview says how many ingredients count. The server computes the saved macros, and recipe detail marks typed-in ingredients "not counted".
@@ -231,6 +232,10 @@ Colors:
 - Brass pins: `#C9962E`
 
 Quest Board layout (top to bottom): Level/rank pill + Energy pill; wooden sign with "Quest Board" title; Daily / Weekly / Story tabs; featured quest on a cartoon scroll (kicker, title, wax seal icon, progress bar, objectives, reward chips, primary button); pinned notes grid (Ration duty protein progress, Rest at the inn sleep goal, full-width Guild notice for unlocked exam); bottom tab bar on dark wood. Touch targets ≥ 44 pt.
+
+Layout rules:
+- Text follows the player's text size up to the largest standard size (xxxLarge). The accessibility sizes above it render at that size, because they break these layouts (`TextSizeCap` in `Fantasy_FitnessApp.swift`, a window-scene trait override so sheets get it too; SwiftUI's `.dynamicTypeSize` doesn't reach into sheets). Check new screens at xxxLarge on an iPhone SE.
+- Number fields: the number pad has no return key, and SwiftUI's keyboard toolbar doesn't appear in these sheets, so a sheet with one shows `KeyboardDoneBar` while the keyboard is up (`Components/KeyboardDoneBar.swift`). Close the keyboard (`UIApplication.shared.endEditing()`) before opening another sheet, or it pops back up when that sheet closes.
 
 ## Roadmap
 

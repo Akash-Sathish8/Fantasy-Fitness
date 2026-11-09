@@ -16,6 +16,8 @@ struct PlateSheet: View {
     @State private var items: [PlateItem] = []
     @State private var name = ""
     @State private var search: SearchRequest?
+    @State private var isLogging = false
+    @State private var isKeyboardUp = false
 
     /// Opening the food search, to add a food or to swap one already on the plate.
     private struct SearchRequest: Identifiable {
@@ -26,13 +28,13 @@ struct PlateSheet: View {
 
     private var totals: Macros { FoodMath.plate(items) }
 
-    /// "Chicken breast and Rice", from the first foods on the plate.
+    /// "Chicken breast and Rice, white", or "Chicken breast and 2 more".
     private var suggestedName: String {
-        let names = items.prefix(2).map(\.food.shortName)
         switch items.count {
         case 0: return "Plate"
-        case 1, 2: return names.joined(separator: " and ")
-        default: return names.joined(separator: ", ") + " and more"
+        case 1: return items[0].food.shortName
+        case 2: return "\(items[0].food.shortName) and \(items[1].food.shortName)"
+        default: return "\(items[0].food.shortName) and \(items.count - 1) more"
         }
     }
 
@@ -48,13 +50,13 @@ struct PlateSheet: View {
             VStack(spacing: 10) {
                 ForEach($items) { $item in
                     PlateItemRow(item: $item) {
-                        search = SearchRequest(replacing: item.id, query: item.food.shortName)
+                        openSearch(SearchRequest(replacing: item.id, query: item.food.shortName))
                     } onRemove: {
                         withAnimation(.snappy) { items.removeAll { $0.id == item.id } }
                     }
                 }
             }
-            Button { search = SearchRequest() } label: {
+            Button { openSearch(SearchRequest()) } label: {
                 Label(items.isEmpty ? "Search foods" : "Add a food", systemImage: "magnifyingglass")
             }
             .buttonStyle(.chunky(.wood, minHeight: 48, fontSize: 17))
@@ -66,10 +68,16 @@ struct PlateSheet: View {
                     .padding(.top, 18)
             }
         }
+        .scrollDismissesKeyboard(.interactively)
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            summary
+            // While typing, a slim Done bar takes the summary's place, so more of the list
+            // shows above the keyboard and nothing is logged mid-edit.
+            if isKeyboardUp { KeyboardDoneBar() } else { summary }
         }
+        .tracksKeyboard($isKeyboardUp)
         .presentationDetents([.large])
+        // A swipe down shouldn't throw away a plate; Cancel still does.
+        .interactiveDismissDisabled(!items.isEmpty)
         .sheet(item: $search) { request in
             FoodSearchSheet(initialQuery: request.query) { pick in
                 guard case .food(let food) = pick else { return }
@@ -81,23 +89,22 @@ struct PlateSheet: View {
     /// Plate totals and the Log button, pinned below the list like Log a meal's.
     private var summary: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
-                MacroTile(value: "\(totals.calories)", label: "kcal")
-                MacroTile(value: "\(totals.protein) g", label: "protein")
-                MacroTile(value: "\(totals.carbs) g", label: "carbs")
-                MacroTile(value: "\(totals.fat) g", label: "fat")
-            }
+            totalsRow
             Button {
+                guard !isLogging else { return }
+                isLogging = true  // a second tap during the dismiss would log a second plate
                 let mealName = name.trimmingCharacters(in: .whitespaces).isEmpty ? suggestedName : name
                 if store.logPlate(name: mealName, items: items) {
                     dismiss()
                     onLogged()
+                } else {
+                    isLogging = false
                 }
             } label: {
                 Label("Log meal", systemImage: "fork.knife")
             }
             .buttonStyle(.chunky(.wax))
-            .disabled(items.isEmpty)
+            .disabled(items.isEmpty || isLogging)
         }
         .padding(.horizontal, 24)
         .padding(.top, 14)
@@ -109,11 +116,25 @@ struct PlateSheet: View {
         )
     }
 
+    private var totalsRow: some View {
+        HStack(spacing: 8) {
+            MacroTile(value: totals.calories.formatted(), label: "kcal")
+            MacroTile(value: "\(totals.protein.formatted()) g", label: "protein")
+            MacroTile(value: "\(totals.carbs.formatted()) g", label: "carbs")
+            MacroTile(value: "\(totals.fat.formatted()) g", label: "fat")
+        }
+    }
+
+    private func openSearch(_ request: SearchRequest) {
+        UIApplication.shared.endEditing()  // or the grams keyboard comes back when the search closes
+        search = request
+    }
+
     private func add(_ food: Food, replacing id: PlateItem.ID?) {
         if let id, let index = items.firstIndex(where: { $0.id == id }) {
             items[index].food = food  // keeps the amount already set
         } else {
-            items.append(PlateItem(food: food, grams: food.defaultGrams))
+            items.append(PlateItem(food: food, grams: food.defaultGrams(in: FoodLimits.plateGrams)))
         }
     }
 }
@@ -137,7 +158,7 @@ private struct PlateItemRow: View {
                             .foregroundStyle(Theme.inkSecondary)
                             .lineLimit(2)
                     }
-                    Text("\(item.macros.calories) kcal · \(item.macros.protein) g protein")
+                    Text("\(item.macros.calories)\u{00A0}kcal · \(item.macros.protein)\u{00A0}g protein")
                         .font(.alegreyaSans(15, weight: .bold))
                         .foregroundStyle(Theme.kicker)
                         .contentTransition(.numericText())

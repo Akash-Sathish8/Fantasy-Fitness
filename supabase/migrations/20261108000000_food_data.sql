@@ -141,7 +141,7 @@ begin
   end if;
 
   insert into recipes (author_id, name, meal_type, minutes, servings)
-  values (v_user, trim(p_name), p_meal_type, p_minutes, p_servings)
+  values (v_user, trim(left(trim(p_name), 80)), p_meal_type, p_minutes, p_servings)
   returning id into v_id;
 
   insert into recipe_ingredients (recipe_id, position, name, amount, food_id, grams)

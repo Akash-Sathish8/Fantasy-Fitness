@@ -42,7 +42,8 @@ struct RecipeDetailView: View {
                     .foregroundStyle(Theme.ink)
                     .padding(.top, 18)
                 VStack(spacing: 0) {
-                    ForEach(latest.ingredients, id: \.self) { ingredient in
+                    // By position: two of the same food at the same amount are equal values.
+                    ForEach(Array(latest.ingredients.enumerated()), id: \.offset) { _, ingredient in
                         HStack {
                             Text(ingredient.name)
                                 .font(.alegreyaSans(17, weight: .medium))
@@ -135,7 +136,10 @@ struct MacroTile: View {
             Text(label)
                 .font(.alegreyaSans(13))
                 .foregroundStyle(Theme.inkSecondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)  // "protein" shrinks rather than breaking mid-word
         }
+        .padding(.horizontal, 4)
         .frame(maxWidth: .infinity, minHeight: 56)
         .background(RoundedRectangle(cornerRadius: 10).fill(Theme.checkboxFill))
         .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Theme.outline, lineWidth: 2))

@@ -405,6 +405,7 @@ final class GameStore {
     /// search; typed-in ingredients are saved but not counted.
     func createRecipe(name: String, mealType: MealType, minutes: Int = 15, servings: Int = 1,
                       ingredients: [RecipeIngredientDraft]) async -> Bool {
+        let name = String(name.trimmingCharacters(in: .whitespacesAndNewlines).prefix(FoodLimits.nameLength))
         guard let client else {
             let counted = ingredients.compactMap { draft in draft.food.map { ($0.per100g, draft.grams) } }
             recipes.append(Recipe(id: UUID().uuidString, name: name, mealType: mealType, minutes: minutes,

@@ -87,6 +87,41 @@ final class LocalMeal {
     var macros: Macros { Macros(calories: calories, protein: protein, carbs: carbs, fat: fat) }
 }
 
+/// A plate of foods picked from the food search. Like `LocalMeal`, its macros are a display
+/// copy (the server sums the real ones from its food data), and it's kept after upload
+/// until a refresh includes it. A separate model rather than a change to `LocalMeal`, so
+/// the existing store opens without a migration.
+@Model
+final class LocalPlateMeal {
+    @Attribute(.unique) var id: UUID
+    var userID: UUID
+    var name: String
+    var eatenOn: String
+    /// JSON of `[NewPlateItem]`: each food's id and grams.
+    var itemsData: Data
+    var calories: Int
+    var protein: Int
+    var carbs: Int
+    var fat: Int
+    var uploadedAt: Date?
+    var lastError: String?
+
+    init(userID: UUID, name: String, eatenOn: String, items: [NewPlateItem], macros: Macros) {
+        id = UUID()
+        self.userID = userID
+        self.name = name
+        self.eatenOn = eatenOn
+        itemsData = (try? JSONEncoder().encode(items)) ?? Data()
+        calories = macros.calories
+        protein = macros.protein
+        carbs = macros.carbs
+        fat = macros.fat
+    }
+
+    var items: [NewPlateItem] { (try? JSONDecoder().decode([NewPlateItem].self, from: itemsData)) ?? [] }
+    var macros: Macros { Macros(calories: calories, protein: protein, carbs: carbs, fat: fat) }
+}
+
 /// A "slept 7+ hours" check-in for one night. Like meals, kept after upload until a
 /// refresh includes it, so the check doesn't flicker off.
 @Model
@@ -124,7 +159,8 @@ final class LocalStore {
     private let context: ModelContext
 
     init(inMemory: Bool = false) {
-        let schema = Schema([LocalWorkout.self, LocalSet.self, LocalMeal.self, LocalSleep.self, CachedSnapshot.self])
+        let schema = Schema([LocalWorkout.self, LocalSet.self, LocalMeal.self, LocalPlateMeal.self, LocalSleep.self,
+                             CachedSnapshot.self])
         let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: inMemory)
         do {
             context = ModelContext(try ModelContainer(for: schema, configurations: configuration))
@@ -245,9 +281,20 @@ final class LocalStore {
         (try? context.fetch(FetchDescriptor(predicate: #Predicate<LocalMeal> { $0.userID == user }))) ?? []
     }
 
-    /// Forgets uploaded meals once the refreshed snapshot includes them.
+    func addPlate(_ plate: LocalPlateMeal) throws {
+        context.insert(plate)
+        try context.save()
+    }
+
+    /// Every plate not yet part of a refresh, uploaded or not.
+    func plates(for user: UUID) -> [LocalPlateMeal] {
+        (try? context.fetch(FetchDescriptor(predicate: #Predicate<LocalPlateMeal> { $0.userID == user }))) ?? []
+    }
+
+    /// Forgets uploaded meals and plates once the refreshed snapshot includes them.
     func deleteUploadedMeals(for user: UUID) throws {
         for meal in meals(for: user) where meal.uploadedAt != nil { context.delete(meal) }
+        for plate in plates(for: user) where plate.uploadedAt != nil { context.delete(plate) }
         try context.save()
     }
 

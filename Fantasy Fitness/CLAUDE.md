@@ -38,15 +38,14 @@ The target, for all new code:
 Where the code is today:
 
 - **View model:** `WorkoutSession` covers the workout flow, including quest complete. It's the model for new flows; `BattleSession` covers a dungeon fight the same way. Other screens use `GameStore` plus local `@State`.
-- **View model:** `WorkoutSession` covers the workout flow, including quest complete. It's the model for new flows. Other screens use `GameStore` plus local `@State`.
-- **Services:** `SyncService` (uploads and refresh) and `SleepService` (sleep check-in), both owned by `GameStore` and read as `store.sync` / `store.sleep`.
+- **Services:** `SyncService` (uploads and refresh), `SleepService` (sleep check-in) and `FoodService` (food search), all owned by `GameStore` and read as `store.sync` / `store.sleep` / `store.food`.
 - **`GameStore`:** plays the `AppSession` role but is larger than intended. It also holds each tab's data, sign-in, connection-only actions and snapshot mapping.
 - **Rules:** XP, loot and quest rules are in Postgres. Display copies are `EnergyRules` and `Recovery` (`Models/PlayerProfile.swift`) and `GuildRank` (`Services/Rows.swift`). Battle rules are app-side in `Services/BattleRules.swift`, because fights are still decided on the phone (see the known gap below).
 - **Folders:** `Views/` has one folder per tab; `Models/`, `Services/` and `Components/` are shared.
 
 Moving toward the target, without a big rewrite:
 
-- New flows (rank exam, cardio) get their own view model or service, as sleep did (`SleepService`), instead of adding to `GameStore`.
+- New flows (rank exam, cardio) get their own view model or service, as sleep and food search did (`SleepService`, `FoodService`), instead of adding to `GameStore`.
 - Shrink `GameStore` toward `AppSession` when already working in that area.
 - Move the display rules into a service when they next change.
 
@@ -61,8 +60,10 @@ Supabase is the backend and the source of truth for anything that affects reward
 - `supabase/migrations/20261106000000_offline_sync.sql`: retry-safe `submit_workout` and `log_meal`. Safe to re-run.
 - `supabase/migrations/20261107000100_item_combat_bonuses.sql`: `items.attack_bonus` / `defense_bonus` for battles. Safe to re-run.
 - `supabase/migrations/20261107000000_sleep_check_in.sql`: `log_rested_night(p_night_of)`, the sleep check-in. Safe to re-run.
+- `supabase/migrations/20261108000000_food_data.sql`: `foods`, `log_food_meal`, `create_recipe` working out macros from searched ingredients, and players can no longer write meal macro columns. Safe to re-run.
+- `supabase/functions/`: Edge Functions (Deno). `food-search` looks foods up on USDA FoodData Central; shared code and its tests are in `_shared/` (see "Edge Functions" below).
 - `Fantasy Fitness/Config/Secrets.plist` (gitignored, never commit): `SUPABASE_URL` and `SUPABASE_ANON_KEY`. Copy `Secrets.example.plist` from the repo root to create it. Only the anon/publishable key goes in the app, never the service-role key.
-- `Fantasy Fitness/Services/`: `SupabaseConfig.swift` (reads the secrets, builds the client), `Rows.swift` (Codable row types and mapping to models), `LocalStore.swift` (SwiftData models and on-device storage), `SyncService.swift` (upload queue and refresh), `SleepService.swift` (sleep check-in), `GameStore.swift` (the single `@Observable` store all views read from via `@Environment(GameStore.self)`).
+- `Fantasy Fitness/Services/`: `SupabaseConfig.swift` (reads the secrets, builds the client), `Rows.swift` (Codable row types and mapping to models), `LocalStore.swift` (SwiftData models and on-device storage), `SyncService.swift` (upload queue and refresh), `SleepService.swift` (sleep check-in), `FoodService.swift` (food search), `GameStore.swift` (the single `@Observable` store all views read from via `@Environment(GameStore.self)`).
 - Without a valid `Secrets.plist` the app runs in **offline demo mode** on the sample data in `Models/` (a banner says so); previews use `GameStore.preview`. Demo data lives in memory only. With keys, every screen shows real data from Supabase or its local copy; sample data is never shown to a signed-in player.
 
 **Schema**
@@ -71,13 +72,16 @@ Supabase is the backend and the source of truth for anything that affects reward
 - Quests: `quest_templates` (server-only), per-player `quests` and `quest_objectives` (metric, target, progress, is_complete).
 - Catalogs: `items` (`attack_bonus` / `defense_bonus` are the battle numbers; new gear must set them to match its `effect` text), `dungeons`, `rank_exams`. Runs: `dungeon_runs`. Exams: `exam_attempts`.
 - Tavern: `recipes`, `recipe_ingredients`, `recipe_ratings` (taste / ease / cost), `recipe_summaries` view.
+- Food data: `foods` holds per-100 g kcal / protein / carbs / fat, copied from USDA by the Edge Functions (`source = 'usda'`, keyed by `fdc_id`; an `'estimate'` row belongs to the player in `created_by`). Players can't read or write it directly; they get food data from the functions. A searched recipe ingredient has `food_id` + `grams`; a plate meal keeps its `[{food_id, grams}]` in `meal_logs.items`.
 - `guilds`, `guild_members` (tables only so far). Storage buckets: `avatars`, `recipe-photos`, `lift-videos` (each user writes only under a folder named with their user id).
 
 **Rules the database enforces**
 - RLS on every table; players read only their own rows (catalogs and public recipes are shared).
 - Column-level grants: players can insert raw data and edit a few profile fields (name, class, bodyweight, macro targets). XP, level, rank, Energy, stats, inventory and quest progress are written only by `security definer` functions.
 - New sign-ups get a profile, stats and starter gear from a trigger on `auth.users`.
-- Client RPCs: `complete_onboarding`, `generate_quests(p_today)`, `submit_workout`, `log_meal`, `log_rested_night`, `equip_item` / `unequip_item`, `start_dungeon_run` / `finish_dungeon_run`, `unlocked_exams`, `create_recipe`. Logging meals, sleep and cardio recomputes quest progress via triggers. `complete_workout` remains for older builds; `submit_workout` calls it internally.
+- Client RPCs: `complete_onboarding`, `generate_quests(p_today)`, `submit_workout`, `log_meal`, `log_food_meal`, `log_rested_night`, `equip_item` / `unequip_item`, `start_dungeon_run` / `finish_dungeon_run`, `unlocked_exams`, `create_recipe`. Logging meals, sleep and cardio recomputes quest progress via triggers. `complete_workout` remains for older builds; `submit_workout` calls it internally.
+- Meal macros always come from server data, because daily protein completes weekly quests: `log_meal` copies them from the recipe, and `log_food_meal(p_id, p_name, p_items, p_eaten_on)` sums `foods` × grams. Players can't write the macro columns of `meal_logs` or `recipes`. `create_recipe` (security definer) works out per-serving macros from the searched ingredients; typed-in ones are saved but not counted, and with none the macros stay null ("Macros pending").
+- Known gap: per-serving macros are fixed when a recipe is created, but players can still update `recipes.servings`. A recipe editor must go through an RPC that recomputes.
 - Stat formulas are placeholders (Strength from best Epley 1RM / bodyweight, Endurance from cardio minutes, Vitality from 7h+ nights) and only ever go up.
 - Known gap: dungeon battles are simulated on the device and the client reports victory. Move resolution server-side before anything competitive. The battle engine is seeded from the run id and has no app dependencies, so the server could later replay a fight from the seed and the player's inputs.
 
@@ -97,19 +101,19 @@ The app reads from and writes to the device, and syncs with Supabase in the back
 
 | Kind | Examples | Rule | Where |
 |---|---|---|---|
-| Created by the user | Workouts, sets, meal logs, sleep check-ins (later: exam attempts, cardio) | Write locally first, queue for upload, never lost offline | `LocalWorkout`, `LocalSet`, `LocalMeal`, `LocalSleep` |
+| Created by the user | Workouts, sets, meal logs, plates of searched foods, sleep check-ins (later: exam attempts, cardio) | Write locally first, queue for upload, never lost offline | `LocalWorkout`, `LocalSet`, `LocalMeal`, `LocalPlateMeal`, `LocalSleep` |
 | Owned by the server | Profile, stats, XP, inventory, quests, catalogs, recipes | Cache for instant display, refresh from the server, server always wins | `CachedSnapshot` |
-| Network only | Gear, dungeon runs, creating or rating recipes (later: leaderboards, forum, PvP, raids) | Needs a connection; offline shows "You're offline" | Direct calls in `GameStore` |
+| Network only | Gear, dungeon runs, creating or rating recipes, food search (later: leaderboards, forum, PvP, raids) | Needs a connection; offline shows "You're offline" | Direct calls in `GameStore`; food search in `FoodService` |
 
-- **Who talks to Supabase:** views never do. `SyncService` owns uploads and refreshes. `GameStore` owns auth and the network-only actions, and turns snapshots into the models views read.
+- **Who talks to Supabase:** views never do. `SyncService` owns uploads and refreshes. `GameStore` owns auth and the network-only actions, and turns snapshots into the models views read. `FoodService` calls the food-search Edge Function.
 - **Snapshot cache:** server-owned data is one JSON `ServerSnapshot` per player, replaced whole by each refresh. It's not split into SwiftData tables because the app never queries or edits it, and an undecodable snapshot is just an empty cache. Dated data is rechecked when shown: quests past `ends_on` are hidden, meals count only on the fetch day, sleep only for last night.
 - **Launch:** a saved session plus a local snapshot opens the app immediately, even offline, then refreshes quietly. The first sign-in on a device still needs a connection.
 - **During a workout:** each set is saved to SwiftData the moment it's logged. The workout is created with its first set; `finishedAt == nil` means in progress. After a crash, or "Keep for later", the Guild Hall and Quest board offer "Resume workout" (one unfinished workout at a time).
 - **Finishing:** the workout joins the queue and the app waits up to 8 seconds for an upload. If the server answers, the summary shows the real payout. If not, it shows "Rewards pending". After a later upload, `ContentView` presents the loot reveal, held back while a workout or battle is on screen (`holdsRewardReveals`).
-- **Meals:** count toward today's rations immediately as a display-only copy. They stay on the device after upload until a refresh includes them, so the numbers don't dip.
+- **Meals:** count toward today's rations immediately as a display-only copy. They stay on the device after upload until a refresh includes them, so the numbers don't dip. Plates (`LocalPlateMeal`, a separate model so the existing store opens without a migration) work the same way; the server sums their real macros from `foods`.
 - **Sleep check-ins:** same pattern as meals. The check shows right away and stays until a refresh includes the server's row.
 - **Sync triggers:** app open or foreground, connection back (`NWPathMonitor`), workout, meal or sleep check-in saved, pull to refresh. Requests during a pass fold into one more pass.
-- **Each pass:** `generate_quests`, upload workouts, upload meals, upload sleep check-ins, fetch and save the snapshot. No connection stops the pass and keeps everything queued. A server refusal skips only that log, keeps it, shows the reason and retries next sync, so one bad log can't block the rest.
+- **Each pass:** `generate_quests`, upload workouts, upload meals and plates, upload sleep check-ins, fetch and save the snapshot. No connection stops the pass and keeps everything queued. A server refusal skips only that log, keeps it, shows the reason and retries next sync, so one bad log can't block the rest.
 - **Logout:** tries to upload first. Anything left stays on the device, tied to that player, and uploads at their next login. Only their cached snapshot is deleted.
 
 Rules that prevent sync bugs:
@@ -117,12 +121,19 @@ Rules that prevent sync bugs:
 - **Logs are add-only.** Sync never edits a workout or meal, so devices can't overwrite each other.
 - **Never calculate rewards locally.** The app sends raw sets; the server returns XP (`xp_gained`, including quests the workout completed) and loot (`item_ids`). Demo mode's estimate is the only exception, because it has no server.
 - **Offline logs have a date limit:** the server accepts dates from 30 days ago to tomorrow.
-- **Client limits must match server limits**, or a log is refused forever (exercise name up to 80 characters, weight up to 2,000 lb).
+- **Client limits must match server limits**, or a log is refused forever (exercise name up to 80 characters, weight up to 2,000 lb; a plate has 1–30 foods of 1–2,000 g each; a recipe has up to 40 ingredients of 1–5,000 g and 1–50 servings). Food limits live in `FoodLimits` (`Models/Food.swift`). Meal and ingredient names are cut to 80 characters by the server rather than refused.
 
 Other storage:
 - Login session: `supabase-swift` stores it. Keep any other secrets in the Keychain, not SwiftData or `UserDefaults`.
 - Small preferences (units, last tab): `@AppStorage`.
 - HealthKit: read on the device and upload only the summaries quests need (e.g. "slept 7.5 hours"), not raw records.
+
+**Edge Functions** (`supabase/functions/`, Deno)
+- `food-search`: `POST {"query", "limit"}` → `{"foods": [{id, source, name, detail, per_100g, portions}]}`. Searches USDA FoodData Central (Foundation, SR Legacy and Survey (FNDDS) foods; no branded foods), saves every result to `foods` with the service role, and returns the row ids, so the app can put a food straight into a recipe or plate.
+- Every function checks the caller's session itself (`_shared/auth.ts`), because it writes with the service role. Errors come back as `{"error": {"code", "message"}}`; `ServerError.message` shows the message as-is, so write it for the player.
+- USDA's top hit can be wrong ("banana" returns dehydrated banana first), so the search shows kcal and protein per 100 g and the player picks. Nothing is picked automatically.
+- Pure logic (normalizing USDA data, energy fallbacks, portions) has Deno tests with saved USDA responses: `deno test --allow-read=supabase/functions supabase/functions/`. Imports are pinned `npm:` / `jsr:` versions; there is no import map.
+- Never log request bodies or USDA URLs (the API key is in the query string).
 
 **Loading and error states**
 - `GameStore.loadState` is `idle / loading / loaded / failed`. With no local copy yet, the tab shell shows a full-screen board: "Opening the guild hall…" while loading, or "Can't reach the guild" with Try again / Log out on failure (`Components/BoardStatus.swift`).
@@ -135,6 +146,7 @@ Other storage:
    - Pick one way and stick to it. Supabase's GitHub integration (and `db push`) tracks applied files in `supabase_migrations.schema_migrations`. A file run by hand in the SQL Editor isn't recorded there, so the integration tries to run it again and fails (e.g. `type "guild_class" already exists`). After running one by hand, record it: `insert into supabase_migrations.schema_migrations (version, name) values ('<timestamp>', '<name>') on conflict do nothing;`
    - Every migration needs a unique timestamp. Supabase identifies a file by the number before the underscore only, so two files with the same number clash (`duplicate key ... schema_migrations_pkey`) and the second never runs. Before adding a file, check the newest number in `supabase/migrations/` (on an up-to-date `main`) and use a later one.
 3. Put the Project URL and anon key in `Config/Secrets.plist`.
+   - Edge Functions: get a free FoodData Central key at api.data.gov, then `supabase secrets set USDA_API_KEY=<key>` and `supabase functions deploy food-search`. Without the key it falls back to USDA's `DEMO_KEY`, which allows only a few searches an hour.
 4. Auth providers: Email is on by default. Apple needs the bundle ID `com.appteamcarolina.Fantasy-Fitness` under Client IDs plus the Sign in with Apple capability in Xcode. Google needs a Google Cloud OAuth client. Add `fantasyfitness://login-callback` under Authentication → URL Configuration → Redirect URLs.
 
 ## Game systems
@@ -180,6 +192,10 @@ Notes:
 
 **Logging meals** (`Views/Tavern/LogMealSheet.swift`)
 - "Log a meal" (Tavern, under today's rations) and "Log meal" (Guild Hall, Ration duty row) open a sheet listing the meal library by meal type. Picking one fills in its nutrition (one serving: kcal, protein, carbs, fat) above the Log button. Logging saves it on the device (`GameStore.logMeal`); the server refills the real macros from the recipe. Recipe detail still has its own Log meal button.
+- "Build a plate from foods" at the top opens `PlateSheet`: add each food from the food search (`FoodSearchSheet`), set grams with `GramsEditor` (type, − / +, or tap a USDA portion like "1 cup, cooked · 158 g"), swap or remove foods, name the meal (it suggests one), and log. `GameStore.logPlate` saves it on the device; the totals shown are a preview until the server's arrive.
+
+**Creating recipes** (`Views/Tavern/RecipeSheets.swift`)
+- Name, meal type, servings (1–50), then ingredients. "Add ingredient" opens the food search; a searched food gets grams and counts toward the macros, and "Add "…" without nutrition" keeps a typed-in ingredient that isn't counted. A live "Per serving" preview says how many ingredients count. The server computes the saved macros, and recipe detail marks typed-in ingredients "not counted".
 
 **Workout session** (`Views/Workout/`)
 - `WorkoutSession` (state) + `WorkoutSessionView` (UI), presented with `.workoutSessionCover($activeWorkout)`. A daily quest opens with its lifts as the plan (exercise, sets, min reps / weight from `quest_objectives`); other entry points open a free session. "Add" adds any exercise.

@@ -59,16 +59,25 @@ struct RateRecipeSheet: View {
     }
 }
 
-/// New recipe with ingredients; macros are filled in automatically once food data is connected.
+/// New recipe. Ingredients picked from the food search count toward its macros, which the
+/// server works out per serving; ingredients typed in as text are saved but not counted.
 struct CreateRecipeSheet: View {
     @Environment(GameStore.self) private var store
     @State private var isSaving = false
     @State private var name = ""
     @State private var mealType: MealType = .dinner
-    @State private var ingredients: [Ingredient] = []
-    @State private var ingredientName = ""
-    @State private var ingredientAmount = ""
+    @State private var servings = 1
+    @State private var ingredients: [RecipeIngredientDraft] = []
+    @State private var isSearching = false
     @Environment(\.dismiss) private var dismiss
+
+    private var countedCount: Int { ingredients.filter(\.isCounted).count }
+
+    /// Preview only; the server's numbers replace these once the recipe is saved.
+    private var perServing: Macros {
+        FoodMath.perServing(ingredients.compactMap { draft in draft.food.map { ($0.per100g, draft.grams) } },
+                            servings: servings)
+    }
 
     var body: some View {
         SheetScaffold(title: "New recipe", closeLabel: "Cancel") {
@@ -81,62 +90,166 @@ struct CreateRecipeSheet: View {
             WoodSegmentedPicker(options: MealType.allCases, selection: $mealType, title: \.name)
                 .padding(.top, 6)
 
+            ServingsStepper(servings: $servings)
+                .padding(.top, 16)
+
             Text("Ingredients")
                 .font(.alegreya(18))
                 .foregroundStyle(Theme.ink)
                 .padding(.top, 20)
-            VStack(spacing: 0) {
-                ForEach(ingredients, id: \.self) { ingredient in
-                    HStack {
-                        Text(ingredient.name)
-                            .font(.alegreyaSans(17, weight: .medium))
-                            .foregroundStyle(Theme.ink)
-                        Spacer()
-                        Text(ingredient.amount)
-                            .font(.alegreyaSans(16))
-                            .foregroundStyle(Theme.inkSecondary)
+            VStack(spacing: 10) {
+                ForEach($ingredients) { $ingredient in
+                    IngredientDraftRow(ingredient: $ingredient) {
+                        withAnimation(.snappy) { ingredients.removeAll { $0.id == ingredient.id } }
                     }
-                    .padding(.vertical, 10)
-                    DashedDivider()
                 }
             }
+            .padding(.top, 8)
 
-            HStack(alignment: .bottom, spacing: 10) {
-                ParchmentField(title: "Ingredient", text: $ingredientName, prompt: "Chicken thigh")
-                ParchmentField(title: "Amount", text: $ingredientAmount, prompt: "300 g")
-                    .frame(width: 100)
-            }
-            .padding(.top, 10)
-
-            Button {
-                ingredients.append(Ingredient(name: ingredientName, amount: ingredientAmount))
-                ingredientName = ""
-                ingredientAmount = ""
-            } label: {
+            Button { isSearching = true } label: {
                 Label("Add ingredient", systemImage: "plus")
             }
             .buttonStyle(.chunky(.wood, minHeight: 48, fontSize: 17))
-            .disabled(ingredientName.isEmpty)
+            .disabled(ingredients.count >= FoodLimits.recipeIngredients)
             .padding(.top, 12)
 
-            Text("Macros will be calculated from your ingredients once food data is connected.")
+            if countedCount > 0 {
+                Text("Per serving")
+                    .font(.alegreya(18))
+                    .foregroundStyle(Theme.ink)
+                    .padding(.top, 20)
+                HStack(spacing: 8) {
+                    MacroTile(value: "\(perServing.calories)", label: "kcal")
+                    MacroTile(value: "\(perServing.protein) g", label: "protein")
+                    MacroTile(value: "\(perServing.carbs) g", label: "carbs")
+                    MacroTile(value: "\(perServing.fat) g", label: "fat")
+                }
+                .padding(.top, 8)
+            }
+            Text(macrosNote)
                 .font(.alegreyaSans(14))
                 .foregroundStyle(Theme.inkSecondary)
-                .padding(.top, 16)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.top, 10)
 
             Button("Save recipe") {
                 Task {
                     isSaving = true
-                    if await store.createRecipe(name: name, mealType: mealType, ingredients: ingredients) {
+                    if await store.createRecipe(name: name, mealType: mealType, servings: servings,
+                                                ingredients: ingredients) {
                         dismiss()
                     }
                     isSaving = false
                 }
             }
                 .buttonStyle(.chunky(.emerald))
-                .disabled(name.isEmpty || ingredients.isEmpty || isSaving)
+                .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty || ingredients.isEmpty || isSaving)
                 .padding(.top, 18)
         }
+        .sheet(isPresented: $isSearching) {
+            FoodSearchSheet(allowsTextOnly: true) { pick in
+                withAnimation(.snappy) {
+                    switch pick {
+                    case .food(let food):
+                        ingredients.append(RecipeIngredientDraft(name: String(food.name.prefix(FoodLimits.nameLength)),
+                                                                 amount: "", food: food, grams: food.defaultGrams))
+                    case .textOnly(let text):
+                        ingredients.append(RecipeIngredientDraft(name: String(text.prefix(FoodLimits.nameLength)),
+                                                                 amount: "", food: nil, grams: 0))
+                    }
+                }
+            }
+        }
+    }
+
+    private var macrosNote: String {
+        if ingredients.isEmpty {
+            return "Search for each ingredient and the Tavern works out the macros per serving."
+        }
+        if countedCount == ingredients.count {
+            return "Counted from all \(countedCount) ingredient\(countedCount == 1 ? "" : "s")."
+        }
+        return "Counted from \(countedCount) of \(ingredients.count) ingredients. Searched foods count; typed-in ones don't."
+    }
+}
+
+/// "Serves 4" with − and +. Macros are per serving, so this divides the whole recipe.
+private struct ServingsStepper: View {
+    @Binding var servings: Int
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Text("Serves")
+                .font(.alegreyaSans(17, weight: .bold))
+                .foregroundStyle(Theme.ink)
+            Spacer()
+            step("minus", label: "Fewer servings") { servings -= 1 }
+                .disabled(servings <= FoodLimits.recipeServings.lowerBound)
+            Text("\(servings)")
+                .font(.alegreyaSans(20, weight: .bold))
+                .foregroundStyle(Theme.ink)
+                .monospacedDigit()
+                .contentTransition(.numericText())
+                .frame(minWidth: 32)
+            step("plus", label: "More servings") { servings += 1 }
+                .disabled(servings >= FoodLimits.recipeServings.upperBound)
+        }
+        .accessibilityElement(children: .contain)
+    }
+
+    private func step(_ systemImage: String, label: String, action: @escaping () -> Void) -> some View {
+        Button { withAnimation(.snappy) { action() } } label: {
+            Image(systemName: systemImage)
+                .font(.system(size: 17, weight: .heavy))
+                .frame(width: 20, height: 44)
+        }
+        .buttonStyle(.chunky(.wood, minHeight: 44, fullWidth: false, fontSize: 17))
+        .accessibilityLabel(label)
+    }
+}
+
+/// An ingredient being added: a searched food with its grams, or a typed-in name with a
+/// free-text amount that isn't counted.
+private struct IngredientDraftRow: View {
+    @Binding var ingredient: RecipeIngredientDraft
+    let onRemove: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 8) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(ingredient.name)
+                        .font(.alegreyaSans(17, weight: .bold))
+                        .foregroundStyle(Theme.ink)
+                        .lineLimit(2)
+                    if let food = ingredient.food {
+                        let macros = FoodMath.total([(food.per100g, ingredient.grams)])
+                        Text("\(macros.calories) kcal · \(macros.protein) g protein")
+                            .font(.alegreyaSans(15, weight: .bold))
+                            .foregroundStyle(Theme.kicker)
+                    } else {
+                        TagChip(label: "Not counted", fill: Theme.scrollRoll.opacity(0.35), fontSize: 13)
+                    }
+                }
+                Spacer(minLength: 4)
+                Button(action: onRemove) {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 22, weight: .bold))
+                        .foregroundStyle(Theme.inkSecondary)
+                        .frame(width: 44, height: 44)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Remove \(ingredient.name)")
+            }
+            if let food = ingredient.food {
+                GramsEditor(grams: $ingredient.grams, portions: food.portions, range: FoodLimits.recipeGrams)
+            } else {
+                ParchmentField(title: "Amount", text: $ingredient.amount, prompt: "a pinch")
+            }
+        }
+        .padding(14)
+        .background(RoundedRectangle(cornerRadius: 12).fill(Theme.checkboxFill))
+        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Theme.outline, lineWidth: 2))
     }
 }
 

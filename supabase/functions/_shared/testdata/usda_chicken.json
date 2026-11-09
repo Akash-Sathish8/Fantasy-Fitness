@@ -1,0 +1,329 @@
+{
+  "totalHits": 1083,
+  "foods": [
+    {
+      "fdcId": 2705969,
+      "description": "Chicken breast, grilled with sauce, skin eaten",
+      "dataType": "Survey (FNDDS)",
+      "foodNutrients": [
+        {
+          "nutrientNumber": "203",
+          "nutrientName": "Protein",
+          "unitName": "G",
+          "value": 21.15
+        },
+        {
+          "nutrientNumber": "204",
+          "nutrientName": "Total lipid (fat)",
+          "unitName": "G",
+          "value": 9.15
+        },
+        {
+          "nutrientNumber": "205",
+          "nutrientName": "Carbohydrate, by difference",
+          "unitName": "G",
+          "value": 7.34
+        },
+        {
+          "nutrientNumber": "208",
+          "nutrientName": "Energy",
+          "unitName": "KCAL",
+          "value": 202
+        },
+        {
+          "nutrientNumber": "291",
+          "nutrientName": "Fiber, total dietary",
+          "unitName": "G",
+          "value": 0.2
+        }
+      ],
+      "foodMeasures": [
+        {
+          "disseminationText": "Quantity not specified",
+          "gramWeight": 175
+        },
+        {
+          "disseminationText": "1 small breast",
+          "gramWeight": 150
+        },
+        {
+          "disseminationText": "1 breast, NS as to size",
+          "gramWeight": 175
+        },
+        {
+          "disseminationText": "1 cup, cooked, diced",
+          "gramWeight": 165
+        },
+        {
+          "disseminationText": "1 breast quarter (yield after cooking, bone removed)",
+          "gramWeight": 220
+        },
+        {
+          "disseminationText": "1 large breast",
+          "gramWeight": 195
+        },
+        {
+          "disseminationText": "1 medium slice",
+          "gramWeight": 60
+        },
+        {
+          "disseminationText": "1 large or thick slice",
+          "gramWeight": 85
+        },
+        {
+          "disseminationText": "1 small or thin slice",
+          "gramWeight": 30
+        },
+        {
+          "disseminationText": "1 oz, cooked",
+          "gramWeight": 28.35
+        },
+        {
+          "disseminationText": "1 medium breast",
+          "gramWeight": 175
+        }
+      ]
+    },
+    {
+      "fdcId": 2705970,
+      "description": "Chicken breast, grilled with sauce, skin not eaten",
+      "dataType": "Survey (FNDDS)",
+      "foodNutrients": [
+        {
+          "nutrientNumber": "203",
+          "nutrientName": "Protein",
+          "unitName": "G",
+          "value": 24.33
+        },
+        {
+          "nutrientNumber": "204",
+          "nutrientName": "Total lipid (fat)",
+          "unitName": "G",
+          "value": 4.93
+        },
+        {
+          "nutrientNumber": "205",
+          "nutrientName": "Carbohydrate, by difference",
+          "unitName": "G",
+          "value": 7.34
+        },
+        {
+          "nutrientNumber": "208",
+          "nutrientName": "Energy",
+          "unitName": "KCAL",
+          "value": 178
+        },
+        {
+          "nutrientNumber": "291",
+          "nutrientName": "Fiber, total dietary",
+          "unitName": "G",
+          "value": 0.2
+        }
+      ],
+      "foodMeasures": [
+        {
+          "disseminationText": "1 medium slice",
+          "gramWeight": 60
+        },
+        {
+          "disseminationText": "1 small or thin slice",
+          "gramWeight": 30
+        },
+        {
+          "disseminationText": "1 medium breast",
+          "gramWeight": 165
+        },
+        {
+          "disseminationText": "1 breast quarter (yield after cooking, bone removed)",
+          "gramWeight": 210
+        },
+        {
+          "disseminationText": "1 large or thick slice",
+          "gramWeight": 85
+        },
+        {
+          "disseminationText": "1 small breast",
+          "gramWeight": 140
+        },
+        {
+          "disseminationText": "1 large breast",
+          "gramWeight": 185
+        },
+        {
+          "disseminationText": "1 cup, cooked, diced",
+          "gramWeight": 165
+        },
+        {
+          "disseminationText": "1 oz, cooked",
+          "gramWeight": 28.35
+        },
+        {
+          "disseminationText": "1 breast, NS as to size",
+          "gramWeight": 165
+        },
+        {
+          "disseminationText": "Quantity not specified",
+          "gramWeight": 165
+        }
+      ]
+    },
+    {
+      "fdcId": 2705967,
+      "description": "Chicken breast, grilled without sauce, skin eaten",
+      "dataType": "Survey (FNDDS)",
+      "foodNutrients": [
+        {
+          "nutrientNumber": "203",
+          "nutrientName": "Protein",
+          "unitName": "G",
+          "value": 25.72
+        },
+        {
+          "nutrientNumber": "204",
+          "nutrientName": "Total lipid (fat)",
+          "unitName": "G",
+          "value": 10.62
+        },
+        {
+          "nutrientNumber": "205",
+          "nutrientName": "Carbohydrate, by difference",
+          "unitName": "G",
+          "value": 0
+        },
+        {
+          "nutrientNumber": "208",
+          "nutrientName": "Energy",
+          "unitName": "KCAL",
+          "value": 206
+        },
+        {
+          "nutrientNumber": "291",
+          "nutrientName": "Fiber, total dietary",
+          "unitName": "G",
+          "value": 0
+        }
+      ],
+      "foodMeasures": [
+        {
+          "disseminationText": "Quantity not specified",
+          "gramWeight": 130
+        },
+        {
+          "disseminationText": "1 cup, cooked, diced",
+          "gramWeight": 135
+        },
+        {
+          "disseminationText": "1 breast quarter (yield after cooking, bone removed)",
+          "gramWeight": 155
+        },
+        {
+          "disseminationText": "1 large or thick slice",
+          "gramWeight": 85
+        },
+        {
+          "disseminationText": "1 small or thin slice",
+          "gramWeight": 30
+        },
+        {
+          "disseminationText": "1 medium slice",
+          "gramWeight": 60
+        },
+        {
+          "disseminationText": "1 medium breast",
+          "gramWeight": 130
+        },
+        {
+          "disseminationText": "1 oz, cooked",
+          "gramWeight": 28.35
+        },
+        {
+          "disseminationText": "1 small breast",
+          "gramWeight": 110
+        },
+        {
+          "disseminationText": "1 large breast",
+          "gramWeight": 145
+        }
+      ]
+    },
+    {
+      "fdcId": 2705968,
+      "description": "Chicken breast, grilled without sauce, skin not eaten",
+      "dataType": "Survey (FNDDS)",
+      "foodNutrients": [
+        {
+          "nutrientNumber": "203",
+          "nutrientName": "Protein",
+          "unitName": "G",
+          "value": 29.62
+        },
+        {
+          "nutrientNumber": "204",
+          "nutrientName": "Total lipid (fat)",
+          "unitName": "G",
+          "value": 5.45
+        },
+        {
+          "nutrientNumber": "205",
+          "nutrientName": "Carbohydrate, by difference",
+          "unitName": "G",
+          "value": 0
+        },
+        {
+          "nutrientNumber": "208",
+          "nutrientName": "Energy",
+          "unitName": "KCAL",
+          "value": 176
+        },
+        {
+          "nutrientNumber": "291",
+          "nutrientName": "Fiber, total dietary",
+          "unitName": "G",
+          "value": 0
+        }
+      ],
+      "foodMeasures": [
+        {
+          "disseminationText": "1 medium breast",
+          "gramWeight": 120
+        },
+        {
+          "disseminationText": "1 large or thick slice",
+          "gramWeight": 85
+        },
+        {
+          "disseminationText": "1 small breast",
+          "gramWeight": 105
+        },
+        {
+          "disseminationText": "1 cup, cooked, diced",
+          "gramWeight": 135
+        },
+        {
+          "disseminationText": "Quantity not specified",
+          "gramWeight": 120
+        },
+        {
+          "disseminationText": "1 oz, cooked",
+          "gramWeight": 28.35
+        },
+        {
+          "disseminationText": "1 breast quarter (yield after cooking, bone removed)",
+          "gramWeight": 155
+        },
+        {
+          "disseminationText": "1 large breast",
+          "gramWeight": 135
+        },
+        {
+          "disseminationText": "1 small or thin slice",
+          "gramWeight": 30
+        },
+        {
+          "disseminationText": "1 medium slice",
+          "gramWeight": 60
+        }
+      ]
+    }
+  ]
+}

@@ -48,7 +48,7 @@ struct RecipeDetailView: View {
                                 .font(.alegreyaSans(17, weight: .medium))
                                 .foregroundStyle(Theme.ink)
                             Spacer()
-                            Text(ingredient.amount)
+                            Text(amountText(ingredient))
                                 .font(.alegreyaSans(16))
                                 .foregroundStyle(Theme.inkSecondary)
                         }
@@ -95,6 +95,12 @@ struct RecipeDetailView: View {
         .sheet(isPresented: $showingRating) {
             RateRecipeSheet(recipe: latest)
         }
+    }
+
+    /// Once a recipe has searched ingredients, typed-in ones are marked as not counted.
+    private func amountText(_ ingredient: Ingredient) -> String {
+        guard latest.ingredients.contains(where: \.isCounted), !ingredient.isCounted else { return ingredient.amount }
+        return [ingredient.amount, "not counted"].filter { !$0.isEmpty }.joined(separator: " · ")
     }
 
     private func ratingRow(_ axis: String, _ value: Double) -> some View {

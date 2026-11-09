@@ -83,6 +83,7 @@ final class SyncService {
         }
         pendingWorkouts = local.pendingWorkouts(for: user).count
         pendingMeals = local.meals(for: user).filter { $0.uploadedAt == nil }.count
+            + local.plates(for: user).filter { $0.uploadedAt == nil }.count
         pendingSleeps = local.sleeps(for: user).filter { $0.uploadedAt == nil }.count
     }
 
@@ -218,6 +219,24 @@ final class SyncService {
             try local.save()
             queueChanged()
         }
+        // Plates send food ids and grams; the server sums the macros from its food data.
+        for plate in local.plates(for: user) where plate.uploadedAt == nil {
+            do {
+                try await client.rpc("log_food_meal", params: LogFoodMealParams(
+                    p_id: plate.id, p_name: plate.name, p_items: plate.items, p_eaten_on: plate.eatenOn
+                )).execute()
+                plate.uploadedAt = .now
+                plate.lastError = nil
+            } catch let error where ServerError.isUnreachable(error) || ServerError.isCancelled(error) {
+                throw error
+            } catch {
+                let message = ServerError.message(for: error)
+                plate.lastError = message
+                uploadError = message
+            }
+            try local.save()
+            queueChanged()
+        }
     }
 
     private func uploadSleeps(_ client: SupabaseClient, user: UUID) async throws {
@@ -316,7 +335,21 @@ nonisolated enum ServerError {
     static func message(for error: Error) -> String {
         if let error = error as? PostgrestError { return error.message }
         if let error = error as? AuthError { return error.message }
+        if let error = error as? FunctionsError { return message(for: error) }
         if isUnreachable(error) { return "You're offline. This needs a connection." }
         return error.localizedDescription
+    }
+
+    /// Edge Functions (food search) answer errors with {"error": {"message": ...}}.
+    private static func message(for error: FunctionsError) -> String {
+        switch error {
+        case .httpError(404, _):
+            return "Food search isn't set up on the server yet."
+        case .httpError(_, let data):
+            return (try? JSONDecoder().decode(FunctionErrorBody.self, from: data))?.error.message
+                ?? "The Tavern's food service had a problem. Try again."
+        case .relayError:
+            return "The Tavern's food service can't be reached right now. Try again later."
+        }
     }
 }

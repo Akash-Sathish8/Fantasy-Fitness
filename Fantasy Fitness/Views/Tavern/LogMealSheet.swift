@@ -11,13 +11,19 @@ struct LogMealSheet: View {
     @Environment(GameStore.self) private var store
     @Environment(\.dismiss) private var dismiss
     @State private var selectedID: Recipe.ID?
+    @State private var showingPlate = false
 
     private var selected: Recipe? { store.recipes.first { $0.id == selectedID } }
 
     var body: some View {
         SheetScaffold(title: "Log a meal", closeLabel: "Cancel") {
+            Button { showingPlate = true } label: {
+                Label("Build a plate from foods", systemImage: "magnifyingglass")
+            }
+            .buttonStyle(.chunky(.wood, minHeight: 48, fontSize: 17))
+            .padding(.bottom, 6)
             if store.recipes.isEmpty {
-                Text("No meals in the library yet. Create a recipe in the Tavern first.")
+                Text("No meals in the library yet. Build a plate, or create a recipe in the Tavern.")
                     .font(.alegreyaSans(16))
                     .foregroundStyle(Theme.inkSecondary)
             }
@@ -41,6 +47,9 @@ struct LogMealSheet: View {
             summary
         }
         .presentationDetents([.large])
+        .sheet(isPresented: $showingPlate) {
+            PlateSheet { dismiss() }
+        }
     }
 
     /// The chosen meal's nutrition and the Log button, pinned below the list.

@@ -23,6 +23,12 @@ struct Macros: Hashable {
 struct Ingredient: Hashable {
     let name: String
     let amount: String
+    /// Set when the ingredient was picked from the food search; only those count toward
+    /// the recipe's macros.
+    var foodID: UUID? = nil
+    var grams: Double? = nil
+
+    var isCounted: Bool { foodID != nil }
 }
 
 /// Ratings are on separate axes; macro profile is computed, not rated.

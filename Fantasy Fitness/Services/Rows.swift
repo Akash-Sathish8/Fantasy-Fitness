@@ -328,10 +328,66 @@ nonisolated struct IngredientRow: Codable, Sendable {
     let position: Int
     let name: String
     let amount: String
+    /// Set for ingredients picked from the food search. Optional, so snapshots cached
+    /// before these columns existed still decode.
+    let foodID: UUID?
+    let grams: Double?
 
     enum CodingKeys: String, CodingKey {
-        case position, name, amount
+        case position, name, amount, grams
         case recipeID = "recipe_id"
+        case foodID = "food_id"
+    }
+
+    var ingredient: Ingredient {
+        Ingredient(name: name, amount: amount, foodID: foodID, grams: grams)
+    }
+}
+
+/// A food from the food-search Edge Function (`FoodJson` in supabase/functions/_shared/foods.ts).
+nonisolated struct FoodRow: Decodable, Sendable {
+    let id: UUID
+    let source: String
+    let name: String
+    let detail: String
+    let per100g: Per100gRow
+    let portions: [PortionRow]
+
+    enum CodingKeys: String, CodingKey {
+        case id, source, name, detail, portions
+        case per100g = "per_100g"
+    }
+
+    nonisolated struct Per100gRow: Decodable, Sendable {
+        let kcal: Double
+        let protein: Double
+        let carbs: Double
+        let fat: Double
+    }
+
+    nonisolated struct PortionRow: Decodable, Sendable {
+        let label: String
+        let grams: Double
+    }
+
+    var food: Food {
+        Food(id: id, source: Food.Source(rawValue: source) ?? .usda, name: name, detail: detail,
+             per100g: Per100g(kcal: per100g.kcal, protein: per100g.protein, carbs: per100g.carbs, fat: per100g.fat),
+             portions: portions.map { Portion(label: $0.label, grams: $0.grams) })
+    }
+}
+
+nonisolated struct FoodSearchResponse: Decodable, Sendable {
+    let foods: [FoodRow]
+}
+
+/// How the Edge Functions report an error: {"error": {"code": "...", "message": "..."}}.
+nonisolated struct FunctionErrorBody: Decodable, Sendable {
+    let error: Detail
+
+    nonisolated struct Detail: Decodable, Sendable {
+        let code: String
+        let message: String
     }
 }
 
@@ -414,9 +470,31 @@ nonisolated struct LogMealParams: Encodable, Sendable {
     let p_eaten_on: String
 }
 
+/// A recipe ingredient for `create_recipe`. Picked foods carry `food_id` and `grams`;
+/// typed-in ones leave them out and don't count toward the macros.
 nonisolated struct NewIngredient: Encodable, Sendable {
     let name: String
     let amount: String
+    var food_id: UUID? = nil
+    var grams: Double? = nil
+}
+
+/// One food on a logged plate. Also how `LocalPlateMeal` stores its items.
+nonisolated struct NewPlateItem: Codable, Sendable {
+    let food_id: UUID
+    let grams: Double
+}
+
+nonisolated struct LogFoodMealParams: Encodable, Sendable {
+    let p_id: UUID
+    let p_name: String
+    let p_items: [NewPlateItem]
+    let p_eaten_on: String
+}
+
+nonisolated struct FoodSearchBody: Encodable, Sendable {
+    let query: String
+    let limit: Int
 }
 
 /// The player's local calendar date as "yyyy-MM-dd", which the server uses for

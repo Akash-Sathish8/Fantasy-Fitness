@@ -42,6 +42,7 @@ final class GameStore {
     @ObservationIgnored let client: SupabaseClient?
     @ObservationIgnored let sync: SyncService
     @ObservationIgnored let sleep: SleepService
+    @ObservationIgnored let food: FoodService
     @ObservationIgnored private let local: LocalStore
     @ObservationIgnored private var userID: UUID?
     @ObservationIgnored private var catalog: [String: Item] = [:]
@@ -52,6 +53,7 @@ final class GameStore {
         local = LocalStore(inMemory: client == nil)
         sync = SyncService(client: client, local: local)
         sleep = SleepService(local: local, sync: sync)
+        food = FoodService(client: client)
         sync.onSnapshot = { [weak self] in self?.apply($0) }
     }
 
@@ -230,18 +232,19 @@ final class GameStore {
         let ingredients = Dictionary(grouping: snapshot.ingredients, by: \.recipeID)
         recipes = snapshot.recipes.map { row in
             row.recipe(
-                ingredients: (ingredients[row.id] ?? []).sorted { $0.position < $1.position }
-                    .map { Ingredient(name: $0.name, amount: $0.amount) },
+                ingredients: (ingredients[row.id] ?? []).sorted { $0.position < $1.position }.map(\.ingredient),
                 currentUser: userID
             )
         }
 
         let served = snapshot.day == today ? snapshot.meals : []
         let notYetServed = userID.map { local.meals(for: $0) }?.filter { $0.eatenOn == today } ?? []
+        let platesNotYetServed = userID.map { local.plates(for: $0) }?.filter { $0.eatenOn == today } ?? []
         rations = DailyRations(
             eaten: served.reduce(Macros.zero) {
                 $0 + Macros(calories: $1.calories, protein: $1.proteinG, carbs: $1.carbsG, fat: $1.fatG)
-            } + notYetServed.reduce(Macros.zero) { $0 + $1.macros },
+            } + notYetServed.reduce(Macros.zero) { $0 + $1.macros }
+              + platesNotYetServed.reduce(Macros.zero) { $0 + $1.macros },
             target: snapshot.profile.targets
         )
         sleep.apply(snapshot.lastSleep)
@@ -364,6 +367,30 @@ final class GameStore {
         return true
     }
 
+    /// Saves a plate of searched foods on the device and counts it toward today's rations
+    /// right away. The server sums the real macros from its food data when it arrives.
+    func logPlate(name: String, items: [PlateItem]) -> Bool {
+        let macros = FoodMath.plate(items)
+        guard client != nil, let userID else {
+            rations = DailyRations(eaten: rations.eaten + macros, target: rations.target)
+            return true
+        }
+        let name = String(name.trimmingCharacters(in: .whitespacesAndNewlines).prefix(FoodLimits.nameLength))
+        do {
+            try local.addPlate(LocalPlateMeal(
+                userID: userID, name: name, eatenOn: LocalDate.string(),
+                items: items.map { NewPlateItem(food_id: $0.food.id, grams: $0.grams) }, macros: macros
+            ))
+        } catch {
+            errorMessage = "Couldn't save that on this device. \(error.localizedDescription)"
+            return false
+        }
+        sync.queueChanged()
+        if let latestSnapshot { apply(latestSnapshot) }
+        sync.requestSync()
+        return true
+    }
+
     func rate(_ recipe: Recipe, taste: Int, ease: Int, cost: Int) async -> Bool {
         guard let client, let recipeID = UUID(uuidString: recipe.id) else { return true }
         return await perform {
@@ -374,11 +401,16 @@ final class GameStore {
         }
     }
 
+    /// The server works out per-serving macros from the ingredients picked from the food
+    /// search; typed-in ingredients are saved but not counted.
     func createRecipe(name: String, mealType: MealType, minutes: Int = 15, servings: Int = 1,
-                      ingredients: [Ingredient]) async -> Bool {
+                      ingredients: [RecipeIngredientDraft]) async -> Bool {
         guard let client else {
+            let counted = ingredients.compactMap { draft in draft.food.map { ($0.per100g, draft.grams) } }
             recipes.append(Recipe(id: UUID().uuidString, name: name, mealType: mealType, minutes: minutes,
-                                  servings: servings, macros: .zero, ingredients: ingredients,
+                                  servings: servings,
+                                  macros: counted.isEmpty ? .zero : FoodMath.perServing(counted, servings: servings),
+                                  ingredients: ingredients.map(\.ingredient),
                                   ratings: RecipeRatings(taste: 0, ease: 0, cost: 0, count: 0), isMine: true))
             return true
         }
@@ -388,7 +420,12 @@ final class GameStore {
                 p_meal_type: mealType.rawValue,
                 p_minutes: minutes,
                 p_servings: servings,
-                p_ingredients: ingredients.map { NewIngredient(name: $0.name, amount: $0.amount) }
+                p_ingredients: ingredients.map { draft in
+                    draft.food.map {
+                        NewIngredient(name: draft.name, amount: FoodMath.gramsText(draft.grams), food_id: $0.id,
+                                      grams: draft.grams)
+                    } ?? NewIngredient(name: draft.name, amount: draft.amount)
+                }
             )).execute()
         }
     }

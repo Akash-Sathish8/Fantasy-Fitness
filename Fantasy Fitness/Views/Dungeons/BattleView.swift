@@ -140,7 +140,8 @@ struct BattleView: View {
             combatant(name: session.player.name, health: session.state.playerHealth,
                       maxHealth: session.player.maxHealth, tint: Theme.progressGreen,
                       hit: session.hitOnPlayer, shakes: session.playerShakes) {
-                ClassEmblem(guildClass: store.player.guildClass, size: 56)
+                CharacterPortrait(appearance: store.player.appearance, equipped: store.player.equipped,
+                                  size: 72, palette: store.player.guildClass.palette, shadowOffset: 5)
             } footer: {
                 FlowLayout(spacing: 8) {
                     TagChip(label: "\(session.player.attack) attack", systemImage: "bolt.fill", fontSize: 14)

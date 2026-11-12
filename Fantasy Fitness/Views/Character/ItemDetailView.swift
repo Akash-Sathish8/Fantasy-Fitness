@@ -45,6 +45,18 @@ struct ItemDetailView: View {
                 TagChip(label: item.effect, systemImage: "sparkles")
                     .padding(.top, 8)
 
+                Text(isEquipped ? "On your character" : "Try it on")
+                    .font(.alegreya(18))
+                    .foregroundStyle(Theme.ink)
+                    .padding(.top, 18)
+                CharacterView(appearance: store.player.appearance, equipped: store.player.equipped.wearing(item))
+                    .frame(height: 190)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
+                    .background(RoundedRectangle(cornerRadius: 14).fill(Theme.noteParchment))
+                    .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Theme.outline, lineWidth: 2))
+                    .padding(.top, 8)
+
                 if let current = currentInSlot, !isEquipped {
                     Text("Compared with equipped")
                         .font(.alegreya(18))

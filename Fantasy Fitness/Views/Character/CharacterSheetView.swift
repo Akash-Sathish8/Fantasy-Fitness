@@ -8,12 +8,28 @@ import SwiftUI
 /// Character sheet → Inventory → Item detail → Equip/compare.
 struct CharacterSheetView: View {
     @Environment(GameStore.self) private var store
+    @State private var isCustomizing = false
 
     private var profile: PlayerProfile { store.player }
 
     var body: some View {
         BoardScreen {
             BoardSign(title: "Character")
+
+            ParchmentCard(padding: 16) {
+                CharacterView(appearance: profile.appearance, equipped: profile.equipped)
+                    .frame(height: 260)
+                    .frame(maxWidth: .infinity)
+                    .background(alignment: .bottom) {
+                        Ellipse().fill(Theme.outline.opacity(0.15)).frame(width: 130, height: 18).offset(y: -4)
+                    }
+                Button { isCustomizing = true } label: {
+                    Label("Customize", systemImage: "paintbrush.fill")
+                }
+                .buttonStyle(.chunky(.wood, minHeight: 44, fullWidth: false, fontSize: 17))
+                .frame(maxWidth: .infinity)
+                .padding(.top, 10)
+            }
 
             ParchmentScroll {
                 HStack(spacing: 16) {
@@ -67,6 +83,7 @@ struct CharacterSheetView: View {
             }
         }
         .gearDestinations()
+        .sheet(isPresented: $isCustomizing) { AppearanceEditorView() }
     }
 }
 

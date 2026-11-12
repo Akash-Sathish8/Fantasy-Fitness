@@ -56,6 +56,7 @@ struct PlayerProfile {
     var bodyweightLb: Double?
     var stats: [StatKind: Int]
     var equipped: [Item]
+    var appearance: Appearance
     var hasCompletedOnboarding: Bool
 
     var levelProgress: Double {
@@ -80,6 +81,7 @@ extension PlayerProfile {
         bodyweightLb: 185,
         stats: [.strength: 42, .endurance: 28, .speed: 19, .agility: 23, .vitality: 35],
         equipped: [.ironHelm, .leatherJerkin, .oakLongsword, .emberCharm],
+        appearance: Appearance(),
         hasCompletedOnboarding: true
     )
 
@@ -87,7 +89,7 @@ extension PlayerProfile {
     static let empty = PlayerProfile(
         displayName: "Adventurer", guildClass: .warrior, rank: "F", level: 1,
         xp: 0, levelStartXP: 0, nextLevelXP: 200, energy: EnergyRules.dailyStart, maxEnergy: 5, bodyweightLb: nil,
-        stats: [:], equipped: [], hasCompletedOnboarding: false
+        stats: [:], equipped: [], appearance: Appearance(), hasCompletedOnboarding: false
     )
 }
 

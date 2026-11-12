@@ -61,12 +61,13 @@ Supabase is the backend and the source of truth for anything that affects reward
 - `supabase/migrations/20261106000000_offline_sync.sql`: retry-safe `submit_workout` and `log_meal`. Safe to re-run.
 - `supabase/migrations/20261107000100_item_combat_bonuses.sql`: `items.attack_bonus` / `defense_bonus` for battles. Safe to re-run.
 - `supabase/migrations/20261107000000_sleep_check_in.sql`: `log_rested_night(p_night_of)`, the sleep check-in. Safe to re-run.
+- `supabase/migrations/20261108000000_character_appearance.sql`: `profiles.body_type` / `skin_tone` / `hair_style` / `hair_color`, which players update directly. Safe to re-run.
 - `Fantasy Fitness/Config/Secrets.plist` (gitignored, never commit): `SUPABASE_URL` and `SUPABASE_ANON_KEY`. Copy `Secrets.example.plist` from the repo root to create it. Only the anon/publishable key goes in the app, never the service-role key.
 - `Fantasy Fitness/Services/`: `SupabaseConfig.swift` (reads the secrets, builds the client), `Rows.swift` (Codable row types and mapping to models), `LocalStore.swift` (SwiftData models and on-device storage), `SyncService.swift` (upload queue and refresh), `SleepService.swift` (sleep check-in), `GameStore.swift` (the single `@Observable` store all views read from via `@Environment(GameStore.self)`).
 - Without a valid `Secrets.plist` the app runs in **offline demo mode** on the sample data in `Models/` (a banner says so); previews use `GameStore.preview`. Demo data lives in memory only. With keys, every screen shows real data from Supabase or its local copy; sample data is never shown to a signed-in player.
 
 **Schema**
-- Players: `profiles` (name, class, rank, xp, generated `level` / `level_start_xp` / `next_level_xp`, energy, bodyweight, macro targets with a 1200 kcal floor, `has_completed_onboarding`), `stats`, `inventory` (one row per owned item, `equipped`).
+- Players: `profiles` (name, class, rank, xp, generated `level` / `level_start_xp` / `next_level_xp`, energy, bodyweight, macro targets with a 1200 kcal floor, `has_completed_onboarding`, the character's look: `body_type`, `skin_tone`, `hair_style`, `hair_color`), `stats`, `inventory` (one row per owned item, `equipped`).
 - Raw activity (client writes): `workouts`, `workout_sets`, `cardio_logs`, `sleep_logs` (nightly hours only; raw HealthKit stays on device), `meal_logs`. Dates are the player's local date sent by the app.
 - Quests: `quest_templates` (server-only), per-player `quests` and `quest_objectives` (metric, target, progress, is_complete).
 - Catalogs: `items` (`attack_bonus` / `defense_bonus` are the battle numbers; new gear must set them to match its `effect` text), `dungeons`, `rank_exams`. Runs: `dungeon_runs`. Exams: `exam_attempts`.
@@ -168,7 +169,7 @@ App shell: `TabView` with a `NavigationStack` per tab. Title screen and onboardi
 Tabs:
 1. **Guild Hall** (home hub: today's quests, Energy, unlocked exams)
 2. **Quests**: Quest board → Workout session → Quest complete → Loot reveal
-3. **Character**: Character sheet → Inventory → Item detail → Equip/compare
+3. **Character**: Character sheet (with the character and Customize) → Inventory → Item detail → Equip/compare
 4. **Dungeons**: Dungeon map → Loadout → Battle → Loot reveal
 5. **Tavern**: Meal library → Recipe detail → Log meal → Rate recipe; Log a meal and Create recipe open as sheets
 
@@ -180,6 +181,12 @@ Notes:
 
 **Logging meals** (`Views/Tavern/LogMealSheet.swift`)
 - "Log a meal" (Tavern, under today's rations) and "Log meal" (Guild Hall, Ration duty row) open a sheet listing the meal library by meal type. Picking one fills in its nutrition (one serving: kcal, protein, carbs, fat) above the Log button. Logging saves it on the device (`GameStore.logMeal`); the server refills the real macros from the recipe. Recipe detail still has its own Log meal button.
+
+**Character look** (`Views/Character/`, `Models/Appearance.swift`; art guide: `docs/character-art.md`)
+- `CharacterView` draws the character as a paper doll: full-canvas transparent layers stacked in a fixed order (hair back, gear backs, body, outfit, face, chest, trinket, hair, head, weapon). `CharacterArt.layers` is the manifest. Each layer uses the asset in `Assets.xcassets/Character` named after it (`body_<frame>`, `hair_<style>`, `item_<item id>`, ...) when it exists and a `CharacterPlaceholder` drawing otherwise, so art lands one file at a time with no code changes.
+- Skin and hair art is drawn in light grays and tinted with `.colorMultiply`. Head items hide the hair unless listed in `CharacterArt.headItemsShowingHair`.
+- `Appearance` (frame, skin tone index, hairstyle, hair color index) is cosmetic only. The app owns the option lists; the server only checks the values are well formed, and unknown values fall back to the defaults. `GameStore.saveAppearance` updates `profiles` directly (needs a connection), shows the change at once and puts it back if the save fails.
+- Shown on the Character sheet (Customize opens `AppearanceEditorView`), in item detail ("Try it on" swaps the item into its slot) and as `CharacterPortrait` on the battle card.
 
 **Workout session** (`Views/Workout/`)
 - `WorkoutSession` (state) + `WorkoutSessionView` (UI), presented with `.workoutSessionCover($activeWorkout)`. A daily quest opens with its lifts as the plan (exercise, sets, min reps / weight from `quest_objectives`); other entry points open a free session. "Add" adds any exercise.

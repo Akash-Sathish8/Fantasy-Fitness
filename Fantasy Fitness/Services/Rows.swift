@@ -28,6 +28,11 @@ nonisolated struct ProfileRow: Codable, Sendable {
     let carbsTargetG: Int
     let fatTargetG: Int
     let hasCompletedOnboarding: Bool
+    // Optional so profiles cached before the appearance columns existed still decode.
+    let bodyType: String?
+    let skinTone: Int?
+    let hairStyle: String?
+    let hairColor: Int?
 
     enum CodingKeys: String, CodingKey {
         case id, rank, xp, level, energy
@@ -42,6 +47,10 @@ nonisolated struct ProfileRow: Codable, Sendable {
         case carbsTargetG = "carbs_target_g"
         case fatTargetG = "fat_target_g"
         case hasCompletedOnboarding = "has_completed_onboarding"
+        case bodyType = "body_type"
+        case skinTone = "skin_tone"
+        case hairStyle = "hair_style"
+        case hairColor = "hair_color"
     }
 
     var targets: Macros {
@@ -62,6 +71,7 @@ nonisolated struct ProfileRow: Codable, Sendable {
             bodyweightLb: bodyweightLb,
             stats: stats?.values ?? [:],
             equipped: equipped,
+            appearance: Appearance(bodyType: bodyType, skinTone: skinTone, hairStyle: hairStyle, hairColor: hairColor),
             hasCompletedOnboarding: hasCompletedOnboarding
         )
     }

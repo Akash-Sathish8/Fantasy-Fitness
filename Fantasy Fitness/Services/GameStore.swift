@@ -308,6 +308,23 @@ final class GameStore {
         _ = await perform { try await client.rpc("unequip_item", params: ["p_item_id": item.id]).execute() }
     }
 
+    // MARK: - Appearance
+
+    /// Saves the character's look. Shows it straight away and puts it back if the save fails.
+    func saveAppearance(_ appearance: Appearance) async -> Bool {
+        guard let previous = profile?.appearance else { return false }
+        profile?.appearance = appearance
+        guard let client, let userID else { return true }
+        let saved = await perform {
+            try await client.from("profiles")
+                .update(AppearanceUpdate(appearance))
+                .eq("id", value: userID)
+                .execute()
+        }
+        if !saved { profile?.appearance = previous }
+        return saved
+    }
+
     // MARK: - Dungeons
 
     /// Spends Energy and opens a run. Returns nil (and sets `errorMessage`) if the server refuses.
@@ -523,6 +540,20 @@ nonisolated private struct OnboardingParams: Encodable, Sendable {
     let p_display_name: String
     let p_bodyweight_lb: Double?
     let p_today: String
+}
+
+nonisolated private struct AppearanceUpdate: Encodable, Sendable {
+    let body_type: String
+    let skin_tone: Int
+    let hair_style: String
+    let hair_color: Int
+
+    init(_ appearance: Appearance) {
+        body_type = appearance.bodyType.rawValue
+        skin_tone = appearance.skinTone
+        hair_style = appearance.hairStyle.rawValue
+        hair_color = appearance.hairColor
+    }
 }
 
 nonisolated private struct FinishRunParams: Encodable, Sendable {
